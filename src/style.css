@@ -6,3 +6,17 @@
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 
 .brand-mark span svg{width:20px;height:20px;stroke-width:3}.art-center>span svg{width:94px;height:94px;stroke-width:2.5}.login-decoration span svg{width:200px;height:200px}
+
+/* Workspace opens on demand at every screen size. */
+.sidebar{inset:0 0 0 auto;width:300px;max-width:88vw;border-right:0;border-left:1px solid var(--line);transform:translateX(100%);visibility:hidden;transition:transform .2s,visibility .2s;padding-top:30px;z-index:50}
+.main-shell{margin-left:0}
+.mobile-menu{display:inline-flex}
+.drawer-close{position:absolute;right:12px;top:12px}
+.sidebar>.brand{margin-right:28px}
+.header-brand{font-size:25px;flex-shrink:0}
+.header-brand .brand-mark{font-size:35px}
+.menu-open{overflow:hidden}
+.menu-open .sidebar{transform:translateX(0);visibility:visible}
+.menu-open .mobile-shade{display:block;position:fixed;inset:0;width:100%;height:100%;background:#06171b99;backdrop-filter:blur(2px);z-index:45}
+#toast{left:50%}
+@media(max-width:650px){.topbar{justify-content:space-between}.header-brand{font-size:22px;padding:0;gap:5px}.header-brand .brand-mark{font-size:32px}.header-brand .brand-os{font-size:8px}.topbar-right{gap:7px}.sidebar{width:300px}.mobile-menu{padding:8px}}
