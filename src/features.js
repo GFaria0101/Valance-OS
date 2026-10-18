@@ -153,5 +153,6 @@ export function createFeatures(ctx){
     return true;
   }
   function completeAgenda(index){for(const c of contacts)if(c.agenda===index){c.done=true;if(c.seller===null)c.seller=0;}persist();}
-  return {reportPage,realtimePage,performancePage,storePage,agendaPage,agendaModal,distributionPage,bind,handle,modalContent,completeAgenda};
+  return {reportPage,realtimePage,performancePage,storePage,agendaPage,agendaModal,distributionPage,bind,handle,modalContent,completeAgenda,
+    searchContacts:()=>contacts.map(c=>({kind:'contact',id:c.id,agenda:c.agenda,name:c.name,detail:`Contato · ${ctx.agendas[c.agenda][0]}`,terms:`${c.source} ${c.done?'realizado':'pendente'} ${c.seller===null?'sem vendedor':users()[c.seller]?.[0]||''}`}))};
 }
