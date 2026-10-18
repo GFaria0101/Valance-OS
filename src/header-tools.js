@@ -60,7 +60,7 @@ export function createHeaderTools(ctx){
     return [...pages,...sellers,...agendas,...ctx.contacts()];
   }
   function modalContent(kind='search'){
-    if(kind==='whatsapp')return `<span class="square-icon">${i('message-circle')}</span><h2>Iniciar conversa no WhatsApp</h2><p>Digite o número da pessoa com quem deseja conversar.</p><form id="quick-whatsapp" class="whatsapp-dialog-form" novalidate><label for="whatsapp-number">Número com DDD<input id="whatsapp-number" name="phone" type="tel" inputmode="tel" autocomplete="off" placeholder="(11) 99999-9999" value="${e(phoneDraft)}" aria-describedby="whatsapp-help whatsapp-error"></label><p class="hint" id="whatsapp-help">Brasil: DDD e número. Outros países: inclua + e o código do país, por exemplo +351.</p><p id="whatsapp-error" class="error" role="alert" hidden></p><button type="submit" class="btn lime full">${i('arrow-up-right')}Abrir conversa no WhatsApp</button><p class="hint whatsapp-open-fallback" id="whatsapp-open-fallback" hidden>Se não abriu, <a id="whatsapp-direct-link" target="_top" rel="noreferrer">clique aqui para abrir o WhatsApp nesta aba</a>.</p></form>`;
+    if(kind==='whatsapp')return `<span class="square-icon">${i('message-circle')}</span><h2>Iniciar conversa no WhatsApp</h2><p>Digite o número da pessoa com quem deseja conversar.</p><form id="quick-whatsapp" class="whatsapp-dialog-form" novalidate><label for="whatsapp-number">Número com DDD<input id="whatsapp-number" name="phone" type="tel" inputmode="tel" autocomplete="off" placeholder="(11) 99999-9999" value="${e(phoneDraft)}" aria-describedby="whatsapp-help whatsapp-error"></label><p class="hint" id="whatsapp-help">Brasil: DDD e número. Outros países: inclua + e o código do país, por exemplo +351.</p><p id="whatsapp-error" class="error" role="alert" hidden></p><a id="whatsapp-launch" class="btn lime full" href="#" target="_blank" rel="noopener noreferrer" role="button">${i('arrow-up-right')}Abrir conversa no WhatsApp</a><div id="whatsapp-link-preview" class="whatsapp-link-preview" hidden><label for="whatsapp-url">Link da conversa</label><div><input id="whatsapp-url" type="text" readonly aria-label="Link da conversa"><button id="whatsapp-copy-link" type="button" class="btn small">${i('copy')}Copiar</button></div><p id="whatsapp-link-status" class="hint" role="status">Se não abrir, copie o link e cole na barra de endereços do navegador.</p></div></form>`;
     return `<span class="square-icon">${i('search')}</span><h2>Pesquisar no site</h2><p>Encontre telas, recursos, vendedores e contatos.</p><label class="global-search-field" for="site-search">${i('search')}<input id="site-search" type="search" autocomplete="off" placeholder="Ex.: ticket médio, Carlos, cupom…" value="${e(searchQuery)}" aria-controls="site-search-results"></label><div id="search-count" class="search-count" role="status"></div><div id="site-search-results" class="site-search-results"></div><p class="search-hint">Ctrl+K para abrir · Esc para fechar · Tab para escolher um resultado</p>`;}
   function drawResults(){
     matches=searchEntries(entries(),searchQuery);
@@ -78,20 +78,34 @@ export function createHeaderTools(ctx){
   function bind(){updateTime();}
   function bindPhone(){
     const form=$('#quick-whatsapp');if(!form)return;
-    const input=$('#whatsapp-number'),error=$('#whatsapp-error'),fallback=$('#whatsapp-open-fallback'),link=$('#whatsapp-direct-link');
-    input.oninput=()=>{phoneDraft=input.value;error.hidden=true;fallback.hidden=true;link.removeAttribute('href');input.removeAttribute('aria-invalid');};
-    form.onsubmit=event=>{
-      event.preventDefault();
-      let phone;
-      try{phone=normalizePhone(input.value);}
-      catch(problem){error.textContent=problem.message;error.hidden=false;input.setAttribute('aria-invalid','true');input.focus();return;}
-      error.hidden=true;input.removeAttribute('aria-invalid');
-      const url=`https://wa.me/${phone}`;
-      link.href=url;fallback.hidden=false;
-      // Same-tab navigation works even when the browser blocks popup windows.
-      try{window.location.assign(url);}
-      catch{error.textContent='Não foi possível abrir automaticamente. Use o link abaixo.';error.hidden=false;}
+    const input=$('#whatsapp-number'),error=$('#whatsapp-error'),launch=$('#whatsapp-launch');
+    const preview=$('#whatsapp-link-preview'),urlInput=$('#whatsapp-url'),status=$('#whatsapp-link-status');
+    function updateLink(showError=false){
+      phoneDraft=input.value;
+      try{
+        const url=`https://wa.me/${normalizePhone(input.value)}`;
+        launch.href=url;urlInput.value=url;preview.hidden=false;
+        input.removeAttribute('aria-invalid');error.hidden=true;return true;
+      }catch(problem){
+        launch.setAttribute('href','#');urlInput.value='';preview.hidden=true;
+        if(showError){error.textContent=problem.message;error.hidden=false;input.setAttribute('aria-invalid','true');input.focus();}
+        else {error.hidden=true;input.removeAttribute('aria-invalid');}
+        return false;
+      }
+    }
+    input.oninput=()=>updateLink();
+    input.onchange=()=>updateLink();
+    // Keep the valid click as a native link: no window.open, submit or scripted navigation.
+    launch.onclick=event=>{if(!updateLink(true))event.preventDefault();};
+    launch.onkeydown=event=>{if(event.key===' '){event.preventDefault();launch.click();}};
+    input.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();launch.click();}};
+    form.onsubmit=event=>{event.preventDefault();launch.click();};
+    $('#whatsapp-copy-link').onclick=async()=>{
+      if(!updateLink(true))return;
+      try{await navigator.clipboard.writeText(urlInput.value);status.textContent='Link copiado. Cole na barra de endereços para abrir a conversa.';}
+      catch{urlInput.focus();urlInput.select();status.textContent='O link está selecionado. Use Copiar e cole na barra de endereços do navegador.';}
     };
+    updateLink();
   }
   function openSearch(){searchQuery='';ctx.openModal('tools','search');}
   function handle(action,arg){
