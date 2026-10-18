@@ -39,7 +39,7 @@ export function createHeaderTools(ctx){
   }
   setInterval(updateTime,1000);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)updateTime();});
-  function markup(){return `<div class="header-tools"><form id="quick-whatsapp" class="quick-whatsapp" novalidate><label for="whatsapp-number" class="sr-only">Número para conversar no WhatsApp</label><span class="whatsapp-icon" title="WhatsApp">${i('message-circle')}</span><input id="whatsapp-number" name="phone" type="tel" inputmode="tel" autocomplete="off" placeholder="DDD + número" value="${e(phoneDraft)}" aria-describedby="whatsapp-help whatsapp-error"><button type="submit" aria-label="Abrir conversa no WhatsApp" title="Abrir conversa no WhatsApp">${i('arrow-up-right')}<span>Abrir WhatsApp</span></button><span class="sr-only" id="whatsapp-help">Brasil: DDD e número. Outros países: inclua + e o código do país.</span><span id="whatsapp-error" class="phone-error" role="alert" hidden></span></form><button class="icon-btn site-search-trigger" data-action="tool-search" aria-label="Pesquisar no site" title="Pesquisar no site (Ctrl+K)">${i('search')}</button><div class="local-time" title="Horário do seu dispositivo · ${e(zone)}">${i('clock-3')}<div><time id="local-clock" datetime="${new Date().toISOString()}">${formatter.format(new Date())}</time><span>Hora local</span></div></div></div>`;}
+  function markup(){return `<div class="header-tools"><button class="quick-whatsapp-trigger" data-action="tool-whatsapp" aria-label="Abrir WhatsApp" aria-haspopup="dialog">${i('message-circle')}<span>WhatsApp</span></button><button class="icon-btn site-search-trigger" data-action="tool-search" aria-label="Pesquisar no site" title="Pesquisar no site (Ctrl+K)">${i('search')}</button><div class="local-time" title="Horário do seu dispositivo · ${e(zone)}">${i('clock-3')}<div><time id="local-clock" datetime="${new Date().toISOString()}">${formatter.format(new Date())}</time><span>Hora local</span></div></div></div>`;}
   function entries(){
     const pageTerms={
       overview:'início home resumo dashboard indicadores vendas contatos conversão gráfico',
@@ -47,7 +47,7 @@ export function createHeaderTools(ctx){
       sales:'vendas meta conversão posição ranking comparação ano anterior',
       generated:'relatórios gerou agenda SSS filtros avançados datas personalizadas indicadores Excel XLSX CSV tabela vendedor compartilhar',
       'by-store':'relatórios gerou loja faturamento SSS Excel CSV datas filtros',
-      realtime:'relatórios tempo real ranking calendário gregoriano 364 dias salão CDIG STV mala projeção meta OFF ON last year',
+      realtime:'relatórios tempo real ranking calendário 364 dias salão CDIG STV mala projeção meta OFF ON last year',
       performance:'dedo duro produtividade contatos preferencial gotas disponíveis feitos pendentes total',
       distribution:'distribuir distribuição contatos vendedor atribuir divisão prévia histórico',
       store:'painel loja ticket médio peças atendimento canal digital física meta vendas dia equipe',
@@ -59,7 +59,9 @@ export function createHeaderTools(ctx){
     const agendas=ctx.agendas.map((a,index)=>({kind:'agenda',name:a[0],detail:'Agenda · visualizar contatos',terms:a[1]+' '+a[6],index}));
     return [...pages,...sellers,...agendas,...ctx.contacts()];
   }
-  function modalContent(){return `<span class="square-icon">${i('search')}</span><h2>Pesquisar no site</h2><p>Encontre telas, recursos, vendedores e contatos.</p><label class="global-search-field" for="site-search">${i('search')}<input id="site-search" type="search" autocomplete="off" placeholder="Ex.: ticket médio, Carlos, cupom…" value="${e(searchQuery)}" aria-controls="site-search-results"></label><div id="search-count" class="search-count" role="status"></div><div id="site-search-results" class="site-search-results"></div><p class="search-hint">Ctrl+K para abrir · Esc para fechar · Tab para escolher um resultado</p>`;}
+  function modalContent(kind='search'){
+    if(kind==='whatsapp')return `<span class="square-icon">${i('message-circle')}</span><h2>Iniciar conversa no WhatsApp</h2><p>Digite o número da pessoa com quem deseja conversar.</p><form id="quick-whatsapp" class="whatsapp-dialog-form" novalidate><label for="whatsapp-number">Número com DDD<input id="whatsapp-number" name="phone" type="tel" inputmode="tel" autocomplete="off" placeholder="(11) 99999-9999" value="${e(phoneDraft)}" aria-describedby="whatsapp-help whatsapp-error"></label><p class="hint" id="whatsapp-help">Brasil: DDD e número. Outros países: inclua + e o código do país, por exemplo +351.</p><p id="whatsapp-error" class="error" role="alert" hidden></p><button type="submit" class="btn lime full">${i('arrow-up-right')}Abrir conversa no WhatsApp</button></form>`;
+    return `<span class="square-icon">${i('search')}</span><h2>Pesquisar no site</h2><p>Encontre telas, recursos, vendedores e contatos.</p><label class="global-search-field" for="site-search">${i('search')}<input id="site-search" type="search" autocomplete="off" placeholder="Ex.: ticket médio, Carlos, cupom…" value="${e(searchQuery)}" aria-controls="site-search-results"></label><div id="search-count" class="search-count" role="status"></div><div id="site-search-results" class="site-search-results"></div><p class="search-hint">Ctrl+K para abrir · Esc para fechar · Tab para escolher um resultado</p>`;}
   function drawResults(){
     matches=searchEntries(entries(),searchQuery);
     const shown=matches.slice(0,24);
@@ -69,11 +71,13 @@ export function createHeaderTools(ctx){
     ctx.icons();
   }
   function bindModal(){
+    if($('#quick-whatsapp')){bindPhone();return;}
     const input=$('#site-search');if(!input)return;
     drawResults();input.oninput=()=>{searchQuery=input.value;drawResults();};input.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();$('#site-search-results button')?.click();}else if(event.key==='ArrowDown'){event.preventDefault();$('#site-search-results button')?.focus();}};input.focus();
   }
-  function bind(){
-    updateTime();const form=$('#quick-whatsapp');if(!form)return;
+  function bind(){updateTime();}
+  function bindPhone(){
+    const form=$('#quick-whatsapp');if(!form)return;
     const input=$('#whatsapp-number'),error=$('#whatsapp-error');
     input.oninput=()=>{phoneDraft=input.value;error.hidden=true;input.removeAttribute('aria-invalid');};
     form.onsubmit=event=>{
@@ -85,6 +89,7 @@ export function createHeaderTools(ctx){
   function openSearch(){searchQuery='';ctx.openModal('tools','search');}
   function handle(action,arg){
     if(action==='tool-search'){openSearch();return;}
+    if(action==='tool-whatsapp'){ctx.openModal('tools','whatsapp');return;}
     if(action==='tool-result'){
       const item=matches[Number(arg)];if(!item)return;
       if(item.kind==='seller')ctx.openSeller(item.index);

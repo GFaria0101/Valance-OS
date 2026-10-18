@@ -16,11 +16,12 @@ test('custom dates, seller, agenda and channel filters constrain actual records'
  assert(Math.abs(all.digital+all.physical-all.revenue)<1e-7);
  assert(grouped.every(r=>r.revenue>0&&r.orders>0));
 });
-test('364-day and Gregorian calendars use distinct, correct comparison dates',()=>{
+test('364-day comparison preserves the weekday and shifts the full range correctly',()=>{
  assert.equal(shiftYearDate('2026-10-18','364'),'2025-10-19');
- assert.equal(shiftYearDate('2026-10-18','gregorian'),'2025-10-18');
+ assert.equal(shiftYearDate('2026-10-01'),'2025-10-02');
  assert.equal(new Date('2026-10-18').getUTCDay(),new Date(shiftYearDate('2026-10-18','364')).getUTCDay());
- assert.notEqual(sumRecords(filterRecords(records,DEFAULT_FILTERS,'364')).revenue,sumRecords(filterRecords(records,DEFAULT_FILTERS,'gregorian')).revenue);
+ const comparable=filterRecords(records,DEFAULT_FILTERS,'364');
+ assert(comparable.every(row=>row.date>='2025-10-02'&&row.date<='2025-10-19'));
  assert.equal(growth(5,0),null);
 });
 test('distribution preserves eligible contacts, balances sellers and rejects over-allocation',()=>{

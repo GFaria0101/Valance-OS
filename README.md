@@ -21,7 +21,7 @@ npm run preview -- --port 4173
 
 ## Cabeçalho e horário
 
-- O campo **DDD + número** abre diretamente `wa.me` para o número digitado, sem salvar o telefone. Aceita número brasileiro com DDD (assume +55) e internacional com `+` e código do país. A conversa é iniciada pelo utilizador no WhatsApp; não há envio automático.
+- O botão compacto **WhatsApp** abre um popup com o campo **DDD + número**. Ao confirmar, abre `wa.me` para o número digitado, sem salvar o telefone. Aceita número brasileiro com DDD (assume +55) e internacional com `+` e código do país. A conversa é iniciada pelo utilizador no WhatsApp; não há envio automático.
 - A **lupa** (também `Ctrl+K` / `Cmd+K`) pesquisa telas, recursos, nomes de vendedores, CPF, cupons, agendas e contatos locais. Os resultados abrem a tela correspondente ou o vendedor/agenda encontrado. A busca não consulta a internet.
 - O **relógio** atualiza a cada segundo usando o horário e o fuso do dispositivo. A saudação muda sem recarregar: bom dia das 05h às 11h59, boa tarde das 12h às 17h59 e boa noite das 18h às 04h59. O horário real é independente das datas fictícias dos relatórios.
 
@@ -35,7 +35,7 @@ O botão com o nome do utilizador e o ícone de menu abre o Workspace, oculto po
 - **Gerou por agenda:** datas personalizadas, filtros de agenda, vendedor, canal e venda mínima; indicadores expansíveis, agrupamento por agenda/vendedor, ordenação, SSS e atribuições de receita por agenda, loja e vendedor. Exporta os resultados filtrados como CSV ou Excel `.xlsx` real.
 - **Gerou por loja:** consolida os resultados da loja com os mesmos filtros e exportações. A demonstração contém uma loja, Reserva Downtown.
 - **Dedo Duro:** acompanha os contatos efetivamente distribuídos e registrados neste navegador: disponíveis preferenciais, feitos, percentual, Gotas e total. Inicialmente os contatos estão livres para distribuição. Filtros de período, agenda, vendedor e situação.
-- **Real Time:** tabelas completas de loja e vendedores, ranking e comparativo entre calendário de 364 dias e gregoriano. O calendário de 364 dias desloca as datas em 364 dias; o gregoriano usa as mesmas datas do ano anterior. Projeção mensal ilustrativa baseada no corte de 18/10 e no mês de 31 dias.
+- **Real Time:** tabelas completas de loja e vendedores, ranking e comparativo fixo de 364 dias, que mantém os mesmos dias da semana do ano anterior. Projeção mensal ilustrativa baseada no corte de 18/10 e no mês de 31 dias.
 - **Painel da loja:** meta mensal, vendas por canal/dia, ticket médio, peças por atendimento, conversão e desempenho por vendedor, com filtros e exportação.
 - **Vendedores:** busca, filtros, edição, acessos, cupons, geração de credenciais demonstrativas, compartilhamento da lista filtrada sem CPF/senhas e prévia para abrir o WhatsApp com o acesso fictício.
 - **Perfil e temas:** edição de perfil, tema claro e escuro.
@@ -54,4 +54,4 @@ Para reiniciar os dados, remova no armazenamento local as entradas com prefixo `
 
 ## Verificação
 
-`npm test` valida filtros, totais, comparação dos calendários, distribuição sem duplicação e o conteúdo do arquivo XLSX. Os fluxos também foram exercitados com Playwright/Chromium: filtros e estados vazios, exportações, distribuição/persistência, registros/Dedo Duro, conclusão das agendas, compartilhamento, abertura simulada do WhatsApp e layout móvel.
+`npm test` valida filtros, totais, comparação de 364 dias, distribuição sem duplicação e o conteúdo do arquivo XLSX. Os fluxos também foram exercitados com Playwright/Chromium: filtros e estados vazios, exportações, distribuição/persistência, registros/Dedo Duro, conclusão das agendas, compartilhamento, abertura simulada do WhatsApp e layout móvel.

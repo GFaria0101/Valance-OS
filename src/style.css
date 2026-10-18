@@ -41,3 +41,13 @@
 @media(max-width:450px){.topbar-right .notification{display:none}.topbar{gap:11px}.workspace-trigger{max-width:160px}.header-tools{gap:8px}.quick-whatsapp{padding-left:8px;gap:6px}.quick-whatsapp button span{display:none}.quick-whatsapp button{padding:7px}.local-time{padding-left:8px;gap:0}.local-time>svg{display:none}.local-time time{font-size:12px}.quick-whatsapp input{font-size:10px}.site-search-trigger{padding:7px}.header-tools .site-search-trigger svg{width:17px}.search-result{gap:8px}.search-kind{display:none}.global-search-field input{font-size:11px}}
 .workspace-trigger.user-menu>span.workspace-user{display:block}
 @media(max-width:360px){.metrics .metric>strong{font-size:18px}}
+.quick-whatsapp-trigger{display:inline-flex;align-items:center;gap:7px;padding:9px 12px;background:var(--card);border:1px solid var(--line);color:var(--text);font-size:11px;font-weight:600;border-radius:7px;white-space:nowrap}
+.quick-whatsapp-trigger:hover{background:var(--soft);border-color:#7a925e}
+.quick-whatsapp-trigger svg{width:16px;height:16px;color:var(--lime)}
+.whatsapp-dialog-form{margin-top:23px}
+.whatsapp-dialog-form input{width:100%}
+.whatsapp-dialog-form input[aria-invalid=true]{border-color:#efa394}
+.whatsapp-dialog-form .error{margin:0 0 17px}
+.whatsapp-dialog-form .error[hidden]{display:none}
+@media(max-width:800px){.header-tools{width:auto;order:2;margin-left:auto;margin-right:10px}.topbar>.topbar-right{order:3;margin-left:0}.quick-whatsapp-trigger{padding:8px}.quick-whatsapp-trigger span{display:none}.topbar{min-height:65px}.header-tools{gap:7px}.local-time{padding-left:8px}.local-time>svg{display:none}}
+@media(max-width:450px){.header-tools{order:3;width:100%;margin:0;justify-content:flex-start}.topbar>.topbar-right{order:2;margin-left:auto}.quick-whatsapp-trigger span{display:inline}.local-time{margin-left:auto}.topbar{min-height:110px}}

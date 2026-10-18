@@ -3,10 +3,9 @@ export const STORE = 'Reserva Downtown';
 export const DEFAULT_FILTERS = {from:'2026-10-01',to:DEMO_DAY,agenda:'all',seller:'all',channel:'all',minimum:'0'};
 export const number = value => value.toLocaleString('pt-BR',{maximumFractionDigits:1});
 export const percent = value => `${number(value)}%`;
-export function shiftYearDate(date,calendar='gregorian') {
+export function shiftYearDate(date) {
   const d=new Date(`${date}T12:00:00Z`);
-  if(calendar==='364') d.setUTCDate(d.getUTCDate()-364);
-  else d.setUTCFullYear(d.getUTCFullYear()-1);
+  d.setUTCDate(d.getUTCDate()-364);
   return d.toISOString().slice(0,10);
 }
 export function buildRecords(users,agendas) {
