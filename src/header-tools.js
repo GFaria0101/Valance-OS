@@ -60,7 +60,7 @@ export function createHeaderTools(ctx){
     return [...pages,...sellers,...agendas,...ctx.contacts()];
   }
   function modalContent(kind='search'){
-    if(kind==='whatsapp')return `<span class="square-icon">${i('message-circle')}</span><h2>Iniciar conversa no WhatsApp</h2><p>Digite o número da pessoa com quem deseja conversar.</p><form id="quick-whatsapp" class="whatsapp-dialog-form" novalidate><label for="whatsapp-number">Número com DDD<input id="whatsapp-number" name="phone" type="tel" inputmode="tel" autocomplete="off" placeholder="(11) 99999-9999" value="${e(phoneDraft)}" aria-describedby="whatsapp-help whatsapp-error"></label><p class="hint" id="whatsapp-help">Brasil: DDD e número. Outros países: inclua + e o código do país, por exemplo +351.</p><p id="whatsapp-error" class="error" role="alert" hidden></p><button type="submit" class="btn lime full">${i('arrow-up-right')}Abrir conversa no WhatsApp</button></form>`;
+    if(kind==='whatsapp')return `<span class="square-icon">${i('message-circle')}</span><h2>Iniciar conversa no WhatsApp</h2><p>Digite o número da pessoa com quem deseja conversar.</p><form id="quick-whatsapp" class="whatsapp-dialog-form" novalidate><label for="whatsapp-number">Número com DDD<input id="whatsapp-number" name="phone" type="tel" inputmode="tel" autocomplete="off" placeholder="(11) 99999-9999" value="${e(phoneDraft)}" aria-describedby="whatsapp-help whatsapp-error"></label><p class="hint" id="whatsapp-help">Brasil: DDD e número. Outros países: inclua + e o código do país, por exemplo +351.</p><p id="whatsapp-error" class="error" role="alert" hidden></p><button type="submit" class="btn lime full">${i('arrow-up-right')}Abrir conversa no WhatsApp</button><p class="hint whatsapp-open-fallback" id="whatsapp-open-fallback" hidden>Se não abriu, <a id="whatsapp-direct-link" target="_top" rel="noreferrer">clique aqui para abrir o WhatsApp nesta aba</a>.</p></form>`;
     return `<span class="square-icon">${i('search')}</span><h2>Pesquisar no site</h2><p>Encontre telas, recursos, vendedores e contatos.</p><label class="global-search-field" for="site-search">${i('search')}<input id="site-search" type="search" autocomplete="off" placeholder="Ex.: ticket médio, Carlos, cupom…" value="${e(searchQuery)}" aria-controls="site-search-results"></label><div id="search-count" class="search-count" role="status"></div><div id="site-search-results" class="site-search-results"></div><p class="search-hint">Ctrl+K para abrir · Esc para fechar · Tab para escolher um resultado</p>`;}
   function drawResults(){
     matches=searchEntries(entries(),searchQuery);
@@ -78,12 +78,19 @@ export function createHeaderTools(ctx){
   function bind(){updateTime();}
   function bindPhone(){
     const form=$('#quick-whatsapp');if(!form)return;
-    const input=$('#whatsapp-number'),error=$('#whatsapp-error');
-    input.oninput=()=>{phoneDraft=input.value;error.hidden=true;input.removeAttribute('aria-invalid');};
+    const input=$('#whatsapp-number'),error=$('#whatsapp-error'),fallback=$('#whatsapp-open-fallback'),link=$('#whatsapp-direct-link');
+    input.oninput=()=>{phoneDraft=input.value;error.hidden=true;fallback.hidden=true;link.removeAttribute('href');input.removeAttribute('aria-invalid');};
     form.onsubmit=event=>{
       event.preventDefault();
-      try{const phone=normalizePhone(input.value);error.hidden=true;input.removeAttribute('aria-invalid');window.open(`https://wa.me/${phone}`,'_blank','noopener,noreferrer');}
-      catch(problem){error.textContent=problem.message;error.hidden=false;input.setAttribute('aria-invalid','true');input.focus();}
+      let phone;
+      try{phone=normalizePhone(input.value);}
+      catch(problem){error.textContent=problem.message;error.hidden=false;input.setAttribute('aria-invalid','true');input.focus();return;}
+      error.hidden=true;input.removeAttribute('aria-invalid');
+      const url=`https://wa.me/${phone}`;
+      link.href=url;fallback.hidden=false;
+      // Same-tab navigation works even when the browser blocks popup windows.
+      try{window.location.assign(url);}
+      catch{error.textContent='Não foi possível abrir automaticamente. Use o link abaixo.';error.hidden=false;}
     };
   }
   function openSearch(){searchQuery='';ctx.openModal('tools','search');}

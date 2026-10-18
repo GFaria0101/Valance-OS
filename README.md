@@ -21,7 +21,7 @@ npm run preview -- --port 4173
 
 ## Cabeçalho e horário
 
-- O botão compacto **WhatsApp** abre um popup com o campo **DDD + número**. Ao confirmar, abre `wa.me` para o número digitado, sem salvar o telefone. Aceita número brasileiro com DDD (assume +55) e internacional com `+` e código do país. A conversa é iniciada pelo utilizador no WhatsApp; não há envio automático.
+- O botão compacto **WhatsApp** abre um popup com o campo **DDD + número**. Ao confirmar, abre `wa.me` na mesma aba para o número digitado, sem depender de uma nova janela. Há também um link direto de alternativa, sem salvar o telefone. Aceita número brasileiro com DDD (assume +55) e internacional com `+` e código do país. A conversa é iniciada pelo utilizador no WhatsApp; não há envio automático.
 - A **lupa** (também `Ctrl+K` / `Cmd+K`) pesquisa telas, recursos, nomes de vendedores, CPF, cupons, agendas e contatos locais. Os resultados abrem a tela correspondente ou o vendedor/agenda encontrado. A busca não consulta a internet.
 - O **relógio** atualiza a cada segundo usando o horário e o fuso do dispositivo. A saudação muda sem recarregar: bom dia das 05h às 11h59, boa tarde das 12h às 17h59 e boa noite das 18h às 04h59. O horário real é independente das datas fictícias dos relatórios.
 
