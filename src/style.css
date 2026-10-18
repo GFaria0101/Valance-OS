@@ -20,3 +20,11 @@
 .menu-open .mobile-shade{display:block;position:fixed;inset:0;width:100%;height:100%;background:#06171b99;backdrop-filter:blur(2px);z-index:45}
 #toast{left:50%}
 @media(max-width:650px){.topbar{justify-content:space-between}.header-brand{font-size:22px;padding:0;gap:5px}.header-brand .brand-mark{font-size:32px}.header-brand .brand-os{font-size:8px}.topbar-right{gap:7px}.sidebar{width:300px}.mobile-menu{padding:8px}}
+
+/* User identity and Workspace share one menu trigger. */
+.workspace-trigger{padding:7px 10px;border:1px solid var(--line);border-radius:8px;min-width:0;max-width:280px}
+.workspace-trigger:hover{background:var(--soft)}
+.workspace-trigger>svg{width:18px;height:18px;margin-left:7px}
+.workspace-trigger .workspace-user{display:block;min-width:0}
+.workspace-user b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:650px){.topbar-right{min-width:0}.workspace-trigger{max-width:190px;gap:7px;padding:6px 8px}.workspace-trigger>svg{display:block;margin-left:2px}.workspace-trigger .workspace-user{display:block}.workspace-trigger .workspace-user b{font-size:10px}.workspace-trigger .workspace-user small{display:none}.workspace-trigger .avatar{display:none}}
