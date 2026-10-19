@@ -1,57 +1,140 @@
 # Valance OS
 
-Sistema demonstrativo de gestão de relacionamento e vendas, em português, com navegação responsiva, dados fictícios e visual inspirado nas referências fornecidas. JavaScript, Vite, Lucide e fontes locais.
+Plataforma de gestão comercial e relacionamento com clientes. Reúne agendas de atendimento, distribuição de contatos, acompanhamento de vendas e relatórios de desempenho em uma interface responsiva.
 
-## Executar
+O projeto busca facilitar a rotina de vendedores e gestores, organizando as oportunidades de contato e oferecendo uma visão dos resultados da equipe e da loja.
 
-Requer Node.js 20.19+ ou 22.12+.
+## Funcionalidades
 
-```sh
-npm ci --cache /workspace/.npm-cache
-npm run dev -- --port 5173
+### Atendimento e relacionamento
+
+- Agendas de pós-venda, aniversariantes, reativação, campanhas e boas-vindas.
+- Registro individual de atendimentos e conclusão das agendas.
+- Distribuição equilibrada de contatos entre vendedores, com prévia e histórico.
+- Abertura de conversas no WhatsApp a partir de um número com DDD ou código internacional.
+- Exibição e cópia do link da conversa como alternativa à abertura direta.
+
+### Vendas e indicadores
+
+- Visão geral com indicadores, gráfico de vendas e ranking da equipe.
+- Painel de vendas com meta, conversão e comparativos.
+- Painel da loja com participação por canal, ticket médio, peças por atendimento e desempenho dos vendedores.
+- Relatório Real Time com projeções, ranking e comparativo de 364 dias.
+
+### Relatórios
+
+- **Gerou por agenda:** resultados e atribuições de receita por agenda ou vendedor.
+- **Gerou por loja:** consolidação dos resultados da unidade.
+- **Dedo Duro:** acompanhamento dos contatos atribuídos, realizados e pendentes por vendedor.
+- Filtros de período, agenda, vendedor e, nos relatórios comerciais, canal e valor mínimo da venda.
+- Indicadores expansíveis, ordenação de tabelas e exportação dos resultados filtrados em CSV e Excel (`.xlsx`).
+
+### Equipe e navegação
+
+- Consulta e edição de vendedores, cupons e acessos demonstrativos.
+- Compartilhamento da lista de vendedores e de credenciais fictícias.
+- Busca global por telas, recursos, vendedores, CPF, cupons e contatos.
+- Menu Workspace recolhível, temas claro e escuro e edição de perfil.
+- Relógio local e saudação automática conforme o horário do dispositivo.
+
+## Tecnologias
+
+| Tecnologia | Uso |
+| --- | --- |
+| JavaScript com módulos ES | Lógica da aplicação e interações |
+| HTML e CSS | Estrutura, estilos e layout responsivo |
+| Vite | Servidor de desenvolvimento e build |
+| Lucide | Ícones da interface |
+| DM Sans e Manrope | Fontes incluídas no projeto |
+| fflate | Compactação dos arquivos de exportação Excel |
+| Node.js Test Runner | Testes automatizados |
+| localStorage | Persistência dos dados no navegador |
+
+## Requisitos
+
+- Node.js 20.19+ ou 22.12+.
+- npm.
+- Navegador atualizado, como Chrome, Edge ou Firefox.
+
+## Instalação
+
+```bash
+git clone https://github.com/GFaria0101/Valance-OS.git
+cd Valance-OS
+npm ci
 ```
 
-Escolha **Entrar na demonstração**. O formulário de login também aceita uma identificação fictícia e uma senha fictícia com pelo menos quatro caracteres. Não use credenciais reais.
+Inicie o servidor de desenvolvimento:
 
-```sh
-npm test
+```bash
+npm run dev
+```
+
+Abra o endereço informado no terminal e selecione **Entrar na demonstração**.
+
+## Comandos disponíveis
+
+| Comando | Descrição |
+| --- | --- |
+| `npm run dev` | Inicia o servidor de desenvolvimento |
+| `npm test` | Executa os testes automatizados |
+| `npm run build` | Gera a versão de produção na pasta `dist` |
+| `npm run preview` | Disponibiliza uma prévia local do build |
+
+Para visualizar o build localmente:
+
+```bash
 npm run build
-npm run preview -- --port 4173
+npm run preview
 ```
 
-## Cabeçalho e horário
+A pasta `dist` pode ser hospedada em um serviço de sites estáticos.
 
-- O botão compacto **WhatsApp** abre um popup com o campo **DDD + número**. Ao confirmar, segue um link nativo `wa.me` para o número digitado em uma nova aba, sem `window.open` ou navegação por script. O popup exibe o link da conversa e permite copiá-lo como alternativa. O telefone não é salvo. Aceita número brasileiro com DDD (assume +55) e internacional com `+` e código do país. A conversa é iniciada pelo utilizador no WhatsApp; não há envio automático.
-- A **lupa** (também `Ctrl+K` / `Cmd+K`) pesquisa telas, recursos, nomes de vendedores, CPF, cupons, agendas e contatos locais. Os resultados abrem a tela correspondente ou o vendedor/agenda encontrado. A busca não consulta a internet.
-- O **relógio** atualiza a cada segundo usando o horário e o fuso do dispositivo. A saudação muda sem recarregar: bom dia das 05h às 11h59, boa tarde das 12h às 17h59 e boa noite das 18h às 04h59. O horário real é independente das datas fictícias dos relatórios.
+## Como usar
 
-## Telas e funções
+1. Entre na demonstração e abra o Workspace pelo botão com o nome do utilizador.
+2. Em **Distribuir contatos**, escolha a agenda, a quantidade e os vendedores participantes. Confira a prévia e confirme a distribuição.
+3. Em **Agendas do dia**, registre os atendimentos ou conclua uma agenda. Os registros atualizam o relatório **Dedo Duro**.
+4. Acompanhe os resultados nos painéis e utilize os filtros dos relatórios para consultar e exportar os dados.
+5. Para iniciar uma conversa, clique em **WhatsApp** no cabeçalho, informe o número e confirme a abertura.
 
-O botão com o nome do utilizador e o ícone de menu abre o Workspace, oculto por padrão no computador e no celular.
+A busca global também pode ser aberta com `Ctrl+K` ou `Cmd+K`. O relógio e a saudação acompanham o horário do dispositivo, sem necessidade de recarregar a página.
 
-- **Visão geral e painel de vendas:** indicadores, gráficos e ranking.
-- **Agendas:** contatos, responsável, registro individual ou conclusão em lote. Quando todos os contatos estiverem realizados, apresenta “Tudo concluído por hoje” e a próxima abertura. Ao registrar um contato ainda sem responsável, ele é atribuído ao primeiro vendedor da demonstração.
-- **Distribuir contatos:** escolhe agenda, quantidade e vendedores ativos; gera uma prévia equilibrada antes de confirmar. Preserva contatos já atribuídos e mantém histórico local.
-- **Gerou por agenda:** datas personalizadas, filtros de agenda, vendedor, canal e venda mínima; indicadores expansíveis, agrupamento por agenda/vendedor, ordenação, SSS e atribuições de receita por agenda, loja e vendedor. Exporta os resultados filtrados como CSV ou Excel `.xlsx` real.
-- **Gerou por loja:** consolida os resultados da loja com os mesmos filtros e exportações. A demonstração contém uma loja, Reserva Downtown.
-- **Dedo Duro:** acompanha os contatos efetivamente distribuídos e registrados neste navegador: disponíveis preferenciais, feitos, percentual, Gotas e total. Inicialmente os contatos estão livres para distribuição. Filtros de período, agenda, vendedor e situação.
-- **Real Time:** tabelas completas de loja e vendedores, ranking e comparativo fixo de 364 dias, que mantém os mesmos dias da semana do ano anterior. Projeção mensal ilustrativa baseada no corte de 18/10 e no mês de 31 dias.
-- **Painel da loja:** meta mensal, vendas por canal/dia, ticket médio, peças por atendimento, conversão e desempenho por vendedor, com filtros e exportação.
-- **Vendedores:** busca, filtros, edição, acessos, cupons, geração de credenciais demonstrativas, compartilhamento da lista filtrada sem CPF/senhas e prévia para abrir o WhatsApp com o acesso fictício.
-- **Perfil e temas:** edição de perfil, tema claro e escuro.
+## Estrutura do projeto
 
-Os relatórios comerciais usam vendas simuladas de **1 a 18 de outubro de 2026**, com histórico comparável de 2025. Datas fora desse período podem não conter vendas. A conclusão das agendas informa a próxima abertura na data de demonstração, 19/10/2026 às 10h de Brasília; não há agendamento por servidor. Os contatos e o Dedo Duro refletem as ações locais, enquanto as vendas são uma base fictícia independente dessas ações.
+```text
+Valance-OS/
+├── index.html
+├── package.json
+├── package-lock.json
+├── src/
+│   ├── main.js            # Inicialização, navegação e telas principais
+│   ├── features.js        # Relatórios, distribuição e gestão de contatos
+│   ├── header-tools.js    # WhatsApp, busca global, relógio e saudação
+│   ├── report-data.js     # Dados comerciais, filtros e comparativos
+│   ├── export.js          # Exportações CSV e Excel
+│   └── style.css          # Estilos, temas e responsividade
+└── tests/
+    ├── data.test.js
+    └── header-tools.test.js
+```
 
-O SSS é `(receita atual / receita comparável - 1) × 100`; sem base anterior, apresenta “Sem base”. “Gerou agenda” e “Gerou loja” dividem o total em 23% e 77%. “Gerou vendedor” é uma atribuição de 29% do mesmo total, não uma receita adicional. As proporções são ilustrativas. OFF representa os canais físicos; ON/CDIG representa o canal digital.
+## Estado atual
 
-## Persistência e compartilhamento
+Esta versão é uma demonstração funcional de frontend, com dados fictícios. Não possui backend, autenticação real ou integração com uma base comercial de produção. As credenciais geradas não concedem acesso a outros sistemas.
 
-Dados e alterações ficam em `localStorage`, somente no navegador atual. O sistema não possui backend, autenticação real, redefinição de senha por servidor ou atualização automática das vendas. Para buscar um vendedor, use por exemplo o CPF fictício `52998224725`. “Adicionar vendedor” simula localizar e ativar um membro já cadastrado na equipe.
+Os relatórios comerciais incluem vendas simuladas de **1 a 18 de outubro de 2026** e um histórico comparável de 2025. Consultas fora desse intervalo podem não apresentar resultados. As proporções de atribuição de receita e as projeções são ilustrativas.
 
-O WhatsApp abre uma mensagem de demonstração para o utilizador escolher o destinatário e confirmar o envio. Nenhuma mensagem é enviada automaticamente. O compartilhamento de relatórios copia os dados filtrados; a lista de vendedores também permite compartilhamento nativo quando suportado e download CSV. Credenciais demonstrativas não dão acesso a sistemas reais.
+Os contatos, as distribuições e as alterações da equipe são salvos em `localStorage`. Esses dados permanecem no navegador utilizado e não são sincronizados entre dispositivos. Os registros de atendimento atualizam os controles locais; as vendas dos relatórios pertencem a uma base simulada independente.
 
-Para reiniciar os dados, remova no armazenamento local as entradas com prefixo `valance-` e `contact-`. Fechar a sessão não apaga os contatos ou as alterações da equipe.
+O WhatsApp é aberto por um link externo. A escolha do destinatário e o envio de mensagens ficam a cargo do utilizador. Algumas prévias de arquivos podem impedir a abertura de links externos; nesses casos, abra o projeto em um navegador ou utilize a opção de copiar o link.
 
-## Verificação
+Para reiniciar a demonstração, remova do armazenamento local do navegador as entradas com os prefixos `valance-` e `contact-`. Sair da conta não apaga os dados salvos.
 
-`npm test` valida filtros, totais, comparação de 364 dias, distribuição sem duplicação e o conteúdo do arquivo XLSX. Os fluxos também foram exercitados com Playwright/Chromium: filtros e estados vazios, exportações, distribuição/persistência, registros/Dedo Duro, conclusão das agendas, compartilhamento, abertura simulada do WhatsApp e layout móvel.
+## Testes
+
+Os testes cobrem filtros e totais dos relatórios, comparação de 364 dias, distribuição de contatos, estrutura dos arquivos Excel, validação de telefones, busca global e limites de horário das saudações.
+
+```bash
+npm test
+```
