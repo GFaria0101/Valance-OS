@@ -1,140 +1,122 @@
 # Valance OS
 
-Plataforma de gestão comercial e relacionamento com clientes. Reúne agendas de atendimento, distribuição de contatos, acompanhamento de vendas e relatórios de desempenho em uma interface responsiva.
+Plataforma de gestão comercial e relacionamento com clientes para quiosques. Reúne agendas, distribuição de contatos, vendas, relatórios e gestão de equipe em uma interface responsiva.
 
-O projeto busca facilitar a rotina de vendedores e gestores, organizando as oportunidades de contato e oferecendo uma visão dos resultados da equipe e da loja.
+## Arquitetura
 
-## Funcionalidades
+- **Frontend:** JavaScript, Vite, HTML e CSS, com ícones Lucide e fontes locais.
+- **Autenticação e dados:** Supabase Auth e PostgreSQL, com políticas RLS por organização, quiosque e utilizador.
+- **Backend:** Netlify Functions para convites, administração de acesso e importação de dados.
+- **Atualização compartilhada:** Supabase Realtime invalida as consultas quando os registros autorizados mudam.
+- **Exportação:** CSV e Excel `.xlsx`.
+- **Testes:** Node.js, PostgreSQL/PGlite e interface com Playwright.
 
-### Atendimento e relacionamento
+A demonstração e a aplicação autenticada são modos separados. O ambiente de produção não utiliza os cadastros fictícios nem o login da demonstração.
 
-- Agendas de pós-venda, aniversariantes, reativação, campanhas e boas-vindas.
-- Registro individual de atendimentos e conclusão das agendas.
-- Distribuição equilibrada de contatos entre vendedores, com prévia e histórico.
-- Abertura de conversas no WhatsApp a partir de um número com DDD ou código internacional.
-- Exibição e cópia do link da conversa como alternativa à abertura direta.
+## Funcionalidades do ambiente autenticado
 
-### Vendas e indicadores
+- Login por e-mail e senha, convites e recuperação de acesso.
+- Administrador com acesso aos quiosques da própria empresa.
+- Gerente restrito ao próprio quiosque e vendedor restrito aos dados autorizados da sua carteira.
+- Clientes, agendas e registros manuais de atendimento.
+- Geração de tarefas e distribuição transacional entre vendedores do mesmo quiosque.
+- Bloqueio de novos contatos para clientes que solicitaram não receber atendimento.
+- Metas mensais da loja e dos vendedores.
+- Vendas brutas antes de descontos, devoluções separadas e comparativo de 364 dias.
+- Relatórios por vendedor, agenda, dia e quiosque, incluindo atribuição ao último contato válido em até 15 dias.
+- Dedo Duro com contatos preferenciais, Gotas e totais realizados.
+- Busca, abertura de conversa no WhatsApp e relógio com saudação conforme o horário local.
+- Importação CSV de clientes e vendas, validada no servidor e confirmada atomicamente no banco.
+- Auditoria de alterações e desativação de acesso preservando o histórico.
 
-- Visão geral com indicadores, gráfico de vendas e ranking da equipe.
-- Painel de vendas com meta, conversão e comparativos.
-- Painel da loja com participação por canal, ticket médio, peças por atendimento e desempenho dos vendedores.
-- Relatório Real Time com projeções, ranking e comparativo de 364 dias.
+A confirmação de atendimento no WhatsApp é manual. Abrir uma conversa não comprova o envio, a entrega ou a leitura de mensagens.
 
-### Relatórios
+## Estado da implantação
 
-- **Gerou por agenda:** resultados e atribuições de receita por agenda ou vendedor.
-- **Gerou por loja:** consolidação dos resultados da unidade.
-- **Dedo Duro:** acompanhamento dos contatos atribuídos, realizados e pendentes por vendedor.
-- Filtros de período, agenda, vendedor e, nos relatórios comerciais, canal e valor mínimo da venda.
-- Indicadores expansíveis, ordenação de tabelas e exportação dos resultados filtrados em CSV e Excel (`.xlsx`).
+O repositório contém a implementação do backend, as migrações e a configuração do Netlify. **Isso não cria automaticamente um projeto Supabase ou um site Netlify.** A implantação depende de configurar os serviços, aplicar a migração, criar o administrador e validar o ambiente real.
 
-### Equipe e navegação
+A API oficial do Presence ainda não está integrada. O caminho disponível é importar arquivos CSV no formato documentado. Depois de confirmada a importação, os usuários conectados recebem as atualizações internas. Isso não representa uma consulta automática ao PDV.
 
-- Consulta e edição de vendedores, cupons e acessos demonstrativos.
-- Compartilhamento da lista de vendedores e de credenciais fictícias.
-- Busca global por telas, recursos, vendedores, CPF, cupons e contatos.
-- Menu Workspace recolhível, temas claro e escuro e edição de perfil.
-- Relógio local e saudação automática conforme o horário do dispositivo.
+A rotina agendada reservada à integração retorna estado bloqueado enquanto o adaptador oficial não existir; não importa dados nem altera cadastros. Backups, SMTP, domínio e testes de restauração devem ser configurados na infraestrutura proprietária.
 
-## Tecnologias
+Os campos de canais de venda e o histórico de devoluções por data dependem dos dados disponibilizados pela origem; não são preenchidos com proporções fictícias.
 
-| Tecnologia | Uso |
-| --- | --- |
-| JavaScript com módulos ES | Lógica da aplicação e interações |
-| HTML e CSS | Estrutura, estilos e layout responsivo |
-| Vite | Servidor de desenvolvimento e build |
-| Lucide | Ícones da interface |
-| DM Sans e Manrope | Fontes incluídas no projeto |
-| fflate | Compactação dos arquivos de exportação Excel |
-| Node.js Test Runner | Testes automatizados |
-| localStorage | Persistência dos dados no navegador |
+## Executar a demonstração
 
-## Requisitos
-
-- Node.js 20.19+ ou 22.12+.
-- npm.
-- Navegador atualizado, como Chrome, Edge ou Firefox.
-
-## Instalação
+Requer Node.js 22.12+ e npm.
 
 ```bash
-git clone https://github.com/GFaria0101/Valance-OS.git
-cd Valance-OS
 npm ci
+npm run dev:demo
 ```
 
-Inicie o servidor de desenvolvimento:
+A demonstração usa dados fictícios e armazenamento local. Ela não conecta contas ou dados reais. Para gerar seu build:
+
+```bash
+npm run build:demo
+```
+
+## Configurar a aplicação autenticada
+
+1. Crie os projetos na conta proprietária e siga [o guia de implantação](docs/deploy.md).
+2. Aplique [a migração do banco](supabase/migrations/202610250001_initial.sql).
+3. Convide o primeiro administrador no Supabase Auth e execute o [bootstrap revisado](supabase/bootstrap.sql).
+4. Configure as variáveis públicas do frontend e os segredos exclusivos das funções, conforme [.env.example](.env.example).
+5. Configure SMTP e os endereços de convite/recuperação.
+6. Publique pelo Netlify e execute a homologação de permissões, convites, importações e Realtime.
 
 ```bash
 npm run dev
-```
-
-Abra o endereço informado no terminal e selecione **Entrar na demonstração**.
-
-## Comandos disponíveis
-
-| Comando | Descrição |
-| --- | --- |
-| `npm run dev` | Inicia o servidor de desenvolvimento |
-| `npm test` | Executa os testes automatizados |
-| `npm run build` | Gera a versão de produção na pasta `dist` |
-| `npm run preview` | Disponibiliza uma prévia local do build |
-
-Para visualizar o build localmente:
-
-```bash
 npm run build
-npm run preview
 ```
 
-A pasta `dist` pode ser hospedada em um serviço de sites estáticos.
+O build de produção exige `VITE_APP_MODE=production`, `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`. Sem os valores obrigatórios, ele falha. A chave administrativa nunca deve ser configurada em uma variável `VITE_`.
 
-## Como usar
+O Vite atende o frontend local. As funções de administração exigem Netlify Functions, disponíveis via `netlify dev` ou no ambiente de homologação.
 
-1. Entre na demonstração e abra o Workspace pelo botão com o nome do utilizador.
-2. Em **Distribuir contatos**, escolha a agenda, a quantidade e os vendedores participantes. Confira a prévia e confirme a distribuição.
-3. Em **Agendas do dia**, registre os atendimentos ou conclua uma agenda. Os registros atualizam o relatório **Dedo Duro**.
-4. Acompanhe os resultados nos painéis e utilize os filtros dos relatórios para consultar e exportar os dados.
-5. Para iniciar uma conversa, clique em **WhatsApp** no cabeçalho, informe o número e confirme a abertura.
+## Importar dados
 
-A busca global também pode ser aberta com `Ctrl+K` ou `Cmd+K`. O relógio e a saudação acompanham o horário do dispositivo, sem necessidade de recarregar a página.
+Leia [o formato dos arquivos CSV](docs/importacao.md). O administrador ou gerente pode baixar os modelos pela aplicação, cadastrar os códigos de vendedor do PDV e importar os arquivos para o quiosque autorizado.
 
-## Estrutura do projeto
+Clientes e vendas são reconhecidos pelo identificador externo dentro de cada quiosque. Importar novamente um registro atualiza seus dados, sem criar outra venda. O lote é desfeito se algum registro for inválido.
+
+A carteira é recalculada pela última compra válida no próprio quiosque. As regras de operação e os limites da informação de origem estão detalhados em [Banco de dados](supabase/README.md).
+
+## Comandos
+
+| Comando | Finalidade |
+| --- | --- |
+| `npm run dev:demo` | Demonstração local com dados fictícios |
+| `npm run dev` | Frontend conectado ao Supabase configurado |
+| `npm test` | Testes de banco, permissões, funções e regras |
+| `npm run test:ui` | Interface de produção com serviços simulados de teste |
+| `npm run build` | Build de produção com validação de configuração |
+| `npm run build:demo` | Build explícito da demonstração |
+| `npm run preview` | Prévia local de um build |
+
+Os testes de interface usam Chromium em `/usr/bin/chromium` ou no caminho indicado por `CHROMIUM_PATH`. Eles geram um build isolado com configuração fictícia de teste, não publicam arquivos e não acessam um projeto remoto.
+
+## Estrutura
 
 ```text
-Valance-OS/
-├── index.html
-├── package.json
-├── package-lock.json
-├── src/
-│   ├── main.js            # Inicialização, navegação e telas principais
-│   ├── features.js        # Relatórios, distribuição e gestão de contatos
-│   ├── header-tools.js    # WhatsApp, busca global, relógio e saudação
-│   ├── report-data.js     # Dados comerciais, filtros e comparativos
-│   ├── export.js          # Exportações CSV e Excel
-│   └── style.css          # Estilos, temas e responsividade
-└── tests/
-    ├── data.test.js
-    └── header-tools.test.js
+src/
+  main.js                 Seleção segura do modo de execução
+  production-app.js       Interface autenticada e operações reais
+  app-config.js           Validação da configuração pública
+  import-csv.js           Leitura dos arquivos de importação
+  demo-app.js             Demonstração independente
+  features.js             Funcionalidades da demonstração
+  header-tools.js         Busca, telefone e regras de saudação
+  export.js               CSV e Excel
+netlify/functions/        API autenticada e rotina de integração
+supabase/                 Migrações, bootstrap e regras de acesso
+tests/                    Testes de dados, funções e segurança
+scripts/                  Validação de build e teste da interface
+docs/                     Implantação e importação
 ```
 
-## Estado atual
+## Validação e operação
 
-Esta versão é uma demonstração funcional de frontend, com dados fictícios. Não possui backend, autenticação real ou integração com uma base comercial de produção. As credenciais geradas não concedem acesso a outros sistemas.
+Os testes locais exercitam isolamento entre empresas/quiosques, bloqueio anônimo, proteção de funções, distribuição atômica, importação idempotente, desativação, atribuição de vendas e proteção de dados entre sessões.
 
-Os relatórios comerciais incluem vendas simuladas de **1 a 18 de outubro de 2026** e um histórico comparável de 2025. Consultas fora desse intervalo podem não apresentar resultados. As proporções de atribuição de receita e as projeções são ilustrativas.
-
-Os contatos, as distribuições e as alterações da equipe são salvos em `localStorage`. Esses dados permanecem no navegador utilizado e não são sincronizados entre dispositivos. Os registros de atendimento atualizam os controles locais; as vendas dos relatórios pertencem a uma base simulada independente.
-
-O WhatsApp é aberto por um link externo. A escolha do destinatário e o envio de mensagens ficam a cargo do utilizador. Algumas prévias de arquivos podem impedir a abertura de links externos; nesses casos, abra o projeto em um navegador ou utilize a opção de copiar o link.
-
-Para reiniciar a demonstração, remova do armazenamento local do navegador as entradas com os prefixos `valance-` e `contact-`. Sair da conta não apaga os dados salvos.
-
-## Testes
-
-Os testes cobrem filtros e totais dos relatórios, comparação de 364 dias, distribuição de contatos, estrutura dos arquivos Excel, validação de telefones, busca global e limites de horário das saudações.
-
-```bash
-npm test
-```
+A homologação em Supabase e Netlify reais permanece necessária para validar Auth, e-mails, PostgREST, Realtime, horários de execução e configurações de infraestrutura. Consulte o checklist em [Implantação](docs/deploy.md) antes de liberar a equipe.

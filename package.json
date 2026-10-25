@@ -4,16 +4,24 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
-    "build": "vite build",
+    "dev": "node scripts/validate-build.mjs && vite --host 0.0.0.0",
+    "build": "node scripts/validate-build.mjs && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "node --test"
+    "test": "node --test",
+    "dev:demo": "VITE_APP_MODE=demo npm run dev --",
+    "build:demo": "VITE_APP_MODE=demo npm run build --",
+    "test:ui": "node scripts/check-production-ui.mjs"
   },
   "dependencies": {
     "@fontsource/dm-sans": "^5.3.0",
     "@fontsource/manrope": "^5.3.0",
+    "@supabase/supabase-js": "^2.118.0",
     "fflate": "^0.8.3",
     "lucide": "^0.468.0",
     "vite": "^6.1.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.11",
+    "playwright": "^1.64.1"
   }
 }

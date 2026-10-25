@@ -1,3 +1,10 @@
 node_modules/
 dist/
 *.log
+.env
+.env.*
+!.env.example
+.netlify/
+supabase/.temp/
+*.dump
+*.backup
