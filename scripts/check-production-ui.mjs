@@ -13,6 +13,7 @@ const makeToken=user=>['test',Buffer.from(JSON.stringify({sub:user.id,role:'auth
 const profile={id:id(1),organization_id:id(100),store_id:id(110),name:'Gerente de teste',email:'manager@example.test',role:'manager',is_active:true,handle:'',coupon:''};
 const seller={...profile,id:id(3),name:'Vendedor de teste',email:'seller@example.test',role:'seller',external_id:'S1'};
 const admin={...profile,id:id(2),store_id:null,name:'Administrador de teste',email:'admin@example.test',role:'admin'};
+const otherAdmin={...admin,id:id(4),name:'Wilber administrador de teste',email:'other-admin@example.test'};
 const accounts=[profile,seller,admin];
 const store={id:id(110),name:'Quiosque de teste'},agenda={id:id(120),name:'Relacionamento',kind:'manual'};
 const otherStore={id:id(111),name:'Outro quiosque de teste'};
@@ -48,7 +49,7 @@ try{
     else if(url.pathname==='/rest/v1/stores')result=caller.role==='admin'?[store,otherStore]:[store];
     else if(url.pathname==='/rest/v1/rpc/report_snapshot'){
       if(rejectReportForStore&&body.p_store_id===rejectReportForStore){rejectReportForStore=null;return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({message:'Período inválido (máximo 10 anos)'})});}
-      result={...snapshot,profile:caller,stores:caller.role==='admin'?[store,otherStore]:[store],profiles:caller.role==='seller'?[seller]:[caller,seller]};
+      result={...snapshot,profile:caller,stores:caller.role==='admin'?[store,otherStore]:[store],profiles:caller.role==='admin'?[caller,otherAdmin,profile,seller]:caller.role==='seller'?[seller]:[caller,seller]};
     }
     else if(url.pathname==='/rest/v1/contact_tasks')result=[{id:id(140),status:'pending',due_date:new Date().toISOString().slice(0,10),customer:{name:'Cliente teste',phone:'5511999998888',do_not_contact:false},agenda:{name:agenda.name}}];
     else if(url.pathname==='/rest/v1/customers')result=[{id:id(130),name:'Cliente teste',phone:'5511999998888'}];
@@ -103,6 +104,22 @@ try{
   await adminContext.routeWebSocket('wss://fixture-project.supabase.co/**',socket=>socket.close());
   await adminContext.route(fixtureUrl+'/**',mockSupabase);await adminContext.route(baseUrl+'/.netlify/functions/api**',mockApi);
   await adminPage.goto(baseUrl);await adminPage.locator('[name="email"]').fill(admin.email);await adminPage.locator('[name="password"]').fill('fixture-password-only');await adminPage.getByRole('button',{name:'Entrar',exact:true}).click();await adminPage.locator('#production-greeting').waitFor();
+  // Organization administrators remain visible in team management even though
+  // their profiles have no store. Another admin is readable, never editable.
+  await adminPage.locator('.workspace-trigger').click();await adminPage.locator('.sidebar [data-action="nav:users"]').click();
+  await adminPage.getByRole('heading',{name:'Equipe do quiosque e administradores',exact:true}).waitFor();
+  const ownAdminRow=adminPage.getByRole('row').filter({has:adminPage.getByRole('cell',{name:admin.email,exact:true})});
+  const otherAdminRow=adminPage.getByRole('row').filter({has:adminPage.getByRole('cell',{name:otherAdmin.email,exact:true})});
+  assert.equal(await ownAdminRow.count(),1);assert.equal(await otherAdminRow.count(),1);
+  assert.equal(await adminPage.getByRole('cell',{name:'Administrador',exact:true}).count(),2);
+  assert.match(await otherAdminRow.innerText(),new RegExp(otherAdmin.name));
+  for(const name of ['Editar','Desativar','Recuperar senha'])assert.equal(await otherAdminRow.getByRole('button',{name,exact:true}).count(),0,`another administrator cannot ${name}`);
+  for(const name of ['Editar','Recuperar senha'])assert.equal(await ownAdminRow.getByRole('button',{name,exact:true}).count(),1,`own administrator preserves ${name}`);
+  assert.equal(await ownAdminRow.getByRole('button',{name:'Desativar',exact:true}).count(),0);
+  for(const person of [profile,seller]){
+    const row=adminPage.getByRole('row').filter({has:adminPage.getByRole('cell',{name:person.email,exact:true})});assert.equal(await row.count(),1);
+    for(const name of ['Editar','Desativar','Recuperar senha'])assert.equal(await row.getByRole('button',{name,exact:true}).count(),1,`operational ${person.role} preserves ${name}`);
+  }
   await adminPage.locator('.workspace-trigger').click();await adminPage.locator('.sidebar [data-action="nav:imports"]').click();
   const previousFrom=await adminPage.locator('#production-filters [name="from"]').inputValue();
   rejectReportForStore=otherStore.id;
@@ -116,5 +133,5 @@ try{
   assert.equal(calls.findLast(call=>call.search==='?action=import-presence').body.store_id,store.id);
   assert(calls.some(call=>call.path.endsWith('report_snapshot')&&call.body.p_store_id===otherStore.id&&call.body.p_from==='1900-01-01'));
   await adminContext.close();
-  assert.deepEqual(errors,[]);console.log('PASS production UI: real auth flow (mocked service), no demo bypass, database snapshot, assignment/contact RPCs, date constraints, empty conversion, mobile layout, cross-tab account isolation, in-flight invitation isolation and failed store-filter rollback before import. No remote project used.');
+  assert.deepEqual(errors,[]);console.log('PASS production UI: real auth flow (mocked service), no demo bypass, database snapshot, assignment/contact RPCs, date constraints, empty conversion, mobile layout, cross-tab account isolation, in-flight invitation isolation, organization admin visibility with restricted actions and failed store-filter rollback before import. No remote project used.');
 }finally{await browser?.close();server.kill();}

@@ -4,7 +4,7 @@ O banco usa Supabase Auth + PostgreSQL. As regras de acesso são verificadas pel
 
 ## Aplicar
 
-Use um projeto Supabase dedicado. Aplique os arquivos de `migrations/` na ordem do nome, com o runner de migrações Supabase ou pelo editor SQL com uma conta administrativa. A inicial, `202610250001_initial.sql`, cria apenas a estrutura e as regras, sem usuários, senhas ou informações comerciais fictícias. `202611070001_report_details.sql` amplia os agregados dos relatórios e preserva as permissões.
+Use um projeto Supabase dedicado. Aplique os arquivos de `migrations/` na ordem do nome, com o runner de migrações Supabase ou pelo editor SQL com uma conta administrativa. A inicial, `202610250001_initial.sql`, cria apenas a estrutura e as regras, sem usuários, senhas ou informações comerciais fictícias. `202611070001_report_details.sql` amplia os agregados dos relatórios e preserva as permissões. `202611070002_team_administrators.sql` mantém os administradores da empresa na lista de equipe ao selecionar um quiosque, respeitando a visibilidade definida pela RLS.
 
 1. Aplique todas as migrações, na ordem.
 2. Em **Authentication → Users**, convide o proprietário usando o e-mail real dele. Não use inscrição pública para provisionar equipes.

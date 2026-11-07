@@ -215,3 +215,30 @@ test('today and yesterday gross use organization local dates, real closing sales
  const agenda=await report(2,id(110),null,id(121));assert.equal(agenda.totals.today_gross,0);assert.equal(agenda.totals.yesterday_gross,0);
  const admin=await report(1,null);assert.equal(admin.totals.today_gross,1129);assert.equal(admin.totals.yesterday_gross,255);
 });
+
+test('selected-store teams include both organization administrators only for authorized admins',async()=>{
+ await owner('insert into auth.users values($1,$2)',[id(20),'second-admin@example.test']);
+ await owner("insert into profiles(id,organization_id,store_id,role,name,email) values($1,$2,null,'admin','Second Administrator',$3)",[id(20),id(100),'second-admin@example.test']);
+ const team=async(user,store)=>(await asUser(user,'select report_snapshot($1,$2,$3) as data',[store,'2026-10-01','2026-10-20'])).rows[0].data.profiles;
+ const ids=rows=>rows.map(row=>row.id).sort();
+ for(const user of [1,20]){
+  const kiosk1=await team(user,id(110));
+  assert.deepEqual(ids(kiosk1.filter(row=>row.role==='admin')),[id(1),id(20)]);
+  assert(kiosk1.some(row=>row.id===id(2)));assert(kiosk1.some(row=>row.id===id(3)));
+  assert(!kiosk1.some(row=>row.id===id(5)||row.id===id(9)||row.organization_id!==id(100)));
+  const kiosk2=await team(user,id(111));
+  assert.deepEqual(ids(kiosk2.filter(row=>row.role==='admin')),[id(1),id(20)]);
+  assert(kiosk2.some(row=>row.id===id(5)));assert(!kiosk2.some(row=>row.id===id(3)));
+  const all=await team(user,null);
+  assert.deepEqual(ids(all.filter(row=>row.role==='admin')),[id(1),id(20)]);
+  assert(all.every(row=>row.organization_id===id(100)));
+ }
+ const manager=await team(2,id(110));
+ assert(!manager.some(row=>row.role==='admin'||row.organization_id!==id(100)));
+ assert(manager.every(row=>row.store_id===id(110)));
+ assert(manager.some(row=>row.id===id(2)));assert(manager.some(row=>row.id===id(3)));
+ assert.deepEqual(ids(await team(3,id(110))),[id(3)]);
+ const foreign=await team(6,id(112));
+ assert.deepEqual(ids(foreign.filter(row=>row.role==='admin')),[id(6)]);
+ assert(foreign.every(row=>row.organization_id===id(101)));
+});
