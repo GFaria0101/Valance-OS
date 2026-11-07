@@ -4,9 +4,9 @@ O banco usa Supabase Auth + PostgreSQL. As regras de acesso são verificadas pel
 
 ## Aplicar
 
-Use um projeto Supabase dedicado. A migração inicial é `migrations/202610250001_initial.sql`; aplique com o runner de migrações Supabase ou pelo editor SQL com uma conta administrativa. Ela cria apenas a estrutura e as regras, sem usuários, senhas ou informações comerciais fictícias.
+Use um projeto Supabase dedicado. Aplique os arquivos de `migrations/` na ordem do nome, com o runner de migrações Supabase ou pelo editor SQL com uma conta administrativa. A inicial, `202610250001_initial.sql`, cria apenas a estrutura e as regras, sem usuários, senhas ou informações comerciais fictícias. `202611070001_report_details.sql` amplia os agregados dos relatórios e preserva as permissões.
 
-1. Aplique a migração.
+1. Aplique todas as migrações, na ordem.
 2. Em **Authentication → Users**, convide o proprietário usando o e-mail real dele. Não use inscrição pública para provisionar equipes.
 3. Edite o e-mail e os nomes da empresa e dos dois quiosques em `bootstrap.sql` e execute-o no editor SQL confiável. O script rejeita o marcador padrão e uma segunda execução para o mesmo proprietário.
 4. Configure o domínio, URLs de retorno e SMTP do Auth, conforme o guia de implantação.
@@ -83,6 +83,10 @@ Para vendedores, uma função agregada com escopo fixo no próprio utilizador pe
 A conversão acompanha clientes distintos com um contato válido no período e uma compra posterior em até 15 dias; coortes recentes são parciais. Vendas totalmente devolvidas não entram como conversão. A receita bruta e as atribuições brutas mantêm o valor original, com a devolução apresentada separadamente.
 
 Metas mensais são cadastradas por `save_target`; não há metas comerciais inventadas. O comparativo anterior desloca o período em 364 dias.
+
+Os agrupamentos `by_agenda`, `by_seller` e `by_store` incluem `previous_gross`, calculado sobre as vendas do período comparativo autorizado. Para gerentes e administradores, cada agenda também inclui `by_seller` e `by_store`, com identificador, nome, `gross` e `previous_gross`: são agrupamentos das mesmas vendas atribuídas à agenda por vendedor que fechou a compra e por quiosque. Não representam parcelas independentes nem canais de venda. Para vendedores, esses dois detalhamentos da agenda ficam vazios e o bruto da agenda, inclusive o comparativo, considera somente a assistência dos próprios contatos.
+
+`totals.today_gross` e `totals.yesterday_gross` usam hoje e ontem no fuso da organização, independentemente do intervalo selecionado. Respeitam os filtros de quiosque, vendedor, agenda e valor mínimo e a autorização das vendas de fechamento. Esses valores não indicam sincronização contínua com o PDV: dependem dos dados efetivamente importados.
 
 ## Verificação local
 

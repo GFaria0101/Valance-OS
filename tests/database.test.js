@@ -1,6 +1,6 @@
 import test,{before,after} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile,readdir} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 let db;
 const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
@@ -12,7 +12,9 @@ before(async()=>{
  create table auth.users(id uuid primary key,email text);
  create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
  grant usage on schema auth to authenticated,anon,service_role;grant execute on function auth.uid() to authenticated,anon,service_role;`);
- await db.exec(await readFile(new URL('../supabase/migrations/202610250001_initial.sql',import.meta.url),'utf8'));
+ const migrations=new URL('../supabase/migrations/',import.meta.url);
+ for(const migration of (await readdir(migrations)).filter(name=>name.endsWith('.sql')).sort()){
+ await db.exec(await readFile(new URL(migration,migrations),'utf8'));}
  for(const n of [1,2,3,4,5,6,7,8,9,19])await owner('insert into auth.users values($1,$2)',[id(n),`user${n}@example.test`]);
  await owner('insert into organizations(id,name) values($1,$2),($3,$4)',[id(100),'Company A',id(101),'Company B']);
  await owner('insert into stores(id,organization_id,name) values($1,$2,$3),($4,$2,$5),($6,$7,$8)',[id(110),id(100),'Quiosque 1',id(111),'Quiosque 2',id(112),id(101),'Foreign store']);
@@ -170,4 +172,46 @@ test('optional report filters constrain revenue, prior period, tasks and attribu
  await assert.rejects(()=>report(null,null,-1),/mínima inválida/);
  assert.equal((await asUser(4,'select private.sale_agenda($1) as a',[id(150)])).rows[0].a,null);
  assert.equal((await asUser(2,'select private.sale_agenda($1) as a',[id(150)])).rows[0].a,id(121));
+});
+
+test('report details compare real attributed sales by agenda, closing seller and store without exposing other sellers to staff',async()=>{
+ await owner("insert into contact_tasks(id,organization_id,store_id,agenda_id,customer_id,assigned_to,due_date,status,outcome,completed_by,completed_at) values($1,$2,$3,$4,$5,$6,'2025-10-08','completed','contacted',$6,'2025-10-08T10:00:00Z')",[id(181),id(100),id(110),id(121),id(130),id(4)]);
+ const report=async(user=2,seller=null,agenda=null,minimum=0)=>(await asUser(user,'select report_snapshot($1,$2,$3,$4,$5,$6) as data',[id(110),'2026-10-01','2026-10-20',seller,agenda,minimum])).rows[0].data;
+ const manager=await report();
+ assert.equal(manager.totals.previous_gross,120);
+ assert.equal(manager.by_store.find(row=>row.store_id===id(110)).previous_gross,120);
+ assert.equal(manager.by_seller.find(row=>row.seller_id===id(3)).previous_gross,120);
+ assert.equal(manager.by_seller.find(row=>row.seller_id===id(4)).previous_gross,0);
+ const agenda=manager.by_agenda.find(row=>row.agenda_id===id(121));
+ assert.equal(agenda.gross,100);assert.equal(agenda.previous_gross,120);
+ assert.equal(agenda.by_seller.length,1);assert.equal(agenda.by_seller[0].seller_id,id(3));
+ assert.equal(agenda.by_seller[0].gross,100);assert.equal(agenda.by_seller[0].previous_gross,120);
+ assert.equal(agenda.by_store.length,1);assert.equal(agenda.by_store[0].store_id,id(110));
+ assert.equal(agenda.by_store[0].gross,100);assert.equal(agenda.by_store[0].previous_gross,120);
+ const assisted=await report(4);const ownAgenda=assisted.by_agenda.find(row=>row.agenda_id===id(121));
+ assert.equal(assisted.totals.gross,200);assert.equal(assisted.totals.previous_gross,0);
+ assert.equal(ownAgenda.gross,100);assert.equal(ownAgenda.previous_gross,120);
+ assert.deepEqual(ownAgenda.by_seller,[]);assert.deepEqual(ownAgenda.by_store,[]);
+ assert.equal((await asUser(4,'select * from sales where id=$1',[id(180)])).rows.length,0);
+ const filtered=await report(2,id(4),id(121));
+ assert.equal(filtered.by_agenda[0].previous_gross,0);assert.deepEqual(filtered.by_agenda[0].by_seller,[]);
+ assert.equal((await report(2,null,null,150)).by_agenda.find(row=>row.agenda_id===id(121)).previous_gross,0);
+});
+
+test('today and yesterday gross use organization local dates, real closing sales and report filters independently of selected interval',async()=>{
+ const today=(await owner("select (current_timestamp at time zone 'America/Sao_Paulo')::date::text as today")).rows[0].today;
+ for(const [n,org,store,customer,seller,offset,hour,amount,status] of [
+ [185,100,110,131,3,0,'00:30',110,'completed'],[186,100,110,131,4,-1,'12:00',240,'completed'],
+ [187,100,110,131,3,-1,'23:30',15,'completed'],[188,100,110,131,4,0,'12:00',20,'completed'],
+ [189,100,111,132,5,0,'12:00',999,'completed'],[190,101,112,133,7,0,'12:00',9999,'completed'],
+ [191,100,110,131,3,0,'12:00',888,'cancelled']]){
+ await owner("insert into sales(id,organization_id,store_id,external_id,customer_id,seller_id,sold_at,gross_amount,status) values($1,$2,$3,$4,$5,$6,(($7::date+$8::integer)+$9::time) at time zone 'America/Sao_Paulo',$10,$11)",[id(n),id(org),id(store),`daily-${n}`,id(customer),id(seller),today,offset,hour,amount,status]);}
+ const report=async(user=2,store=id(110),seller=null,agenda=null,minimum=0)=>(await asUser(user,'select report_snapshot($1,$2,$3,$4,$5,$6) as data',[store,'2026-10-01','2026-10-20',seller,agenda,minimum])).rows[0].data;
+ const manager=await report();assert.equal(manager.totals.today_gross,130);assert.equal(manager.totals.yesterday_gross,255);
+ assert.equal(manager.totals.gross,300);
+ const own=await report(3);assert.equal(own.totals.today_gross,110);assert.equal(own.totals.yesterday_gross,15);
+ const filtered=await report(2,id(110),id(4));assert.equal(filtered.totals.today_gross,20);assert.equal(filtered.totals.yesterday_gross,240);
+ const minimum=await report(2,id(110),null,null,100);assert.equal(minimum.totals.today_gross,110);assert.equal(minimum.totals.yesterday_gross,240);
+ const agenda=await report(2,id(110),null,id(121));assert.equal(agenda.totals.today_gross,0);assert.equal(agenda.totals.yesterday_gross,0);
+ const admin=await report(1,null);assert.equal(admin.totals.today_gross,1129);assert.equal(admin.totals.yesterday_gross,255);
 });

@@ -37,7 +37,7 @@ O repositório contém a implementação do backend, as migrações e a configur
 
 A API oficial do Presence ainda não está integrada. O caminho disponível é importar arquivos CSV no formato documentado. Depois de confirmada a importação, os usuários conectados recebem as atualizações internas. Isso não representa uma consulta automática ao PDV.
 
-A rotina agendada reservada à integração retorna estado bloqueado enquanto o adaptador oficial não existir; não importa dados nem altera cadastros. Backups, SMTP, domínio e testes de restauração devem ser configurados na infraestrutura proprietária.
+O endpoint reservado à integração retorna estado bloqueado enquanto o adaptador oficial não existir; não há agendamento ativo, importação automática nem alteração de cadastros por esse endpoint. Backups, SMTP, domínio e testes de restauração devem ser configurados na infraestrutura proprietária.
 
 Os campos de canais de venda e o histórico de devoluções por data dependem dos dados disponibilizados pela origem; não são preenchidos com proporções fictícias.
 

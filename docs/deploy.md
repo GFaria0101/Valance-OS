@@ -9,7 +9,7 @@ Este guia prepara a implantação do Valance OS para dois quiosques e usuários 
 - Netlify Functions para administração de usuários e importação autorizada.
 - Frontend de produção que utiliza a sessão e os dados do banco; a demonstração continua separada.
 - Importação manual padronizada de clientes e vendas, sem assumir endpoints do Presence.
-- Job diário às **09h UTC / 06h de Brasília**. Enquanto o adaptador oficial do Presence não existir, ele retorna estado **bloqueado**, sem consultar ou modificar o banco.
+- Endpoint reservado à integração do Presence, sem agendamento ativo. Enquanto o adaptador oficial não existir, ele retorna estado **bloqueado**, sem consultar ou modificar o banco.
 
 Não estão configurados por este código: contas e cobrança dos serviços, domínio público, SMTP, backup/PITR do Supabase e acesso à API do Presence. Publicar o frontend não conclui essas etapas.
 
@@ -63,6 +63,8 @@ O convite permite ao funcionário definir sua própria senha. A recuperação é
 | `APP_URL` | Functions | URL pública HTTPS deste ambiente |
 
 `APP_URL` controla os redirecionamentos de e-mail e a origem permitida para mutações do navegador. Configure um valor específico para homologação e outro para produção. Não reutilize a base real em previews de pull requests.
+
+Os escopos separados da tabela dependem do plano do Netlify. Em contas que não permitem selecionar escopos, as variáveis ficam disponíveis aos processos de servidor de build e funções. Restrinja os valores ao contexto `production`, mantenha a chave administrativa sem prefixo `VITE_` e confirme que ela não aparece nos arquivos publicados. O frontend lê somente os campos públicos definidos em `src/app-config.js`. Não é necessário contratar um plano apenas para a apresentação.
 
 A configuração inicial aceita o domínio padrão `*.supabase.co`. Para usar um domínio personalizado do Supabase, revise a validação em `src/app-config.js` e a diretiva `connect-src` no CSP de `netlify.toml` antes da publicação.
 
@@ -123,10 +125,10 @@ Para habilitar a sincronização automática depois, obtenha:
 - identificação de alterações desde a última sincronização;
 - ambiente de testes e regras de uso.
 
-O adaptador deverá fazer importação idempotente, registrar falhas, permitir reprocessamento e validar resultados antes das 10h de Brasília. A execução às 06h apenas deixa margem de trabalho; não garante, sozinha, que a integração concluiu.
+O adaptador deverá fazer importação idempotente, registrar falhas, permitir reprocessamento e validar resultados antes das 10h de Brasília. O agendamento será habilitado junto com o adaptador validado. Enquanto isso, a atualização dos dados do PDV depende da importação manual.
 
 ## 8. Publicar e acompanhar
 
-Execute `npm test` e `npm run build`, valide a homologação e publique no Netlify. Configure domínio próprio e HTTPS quando aprovados. Acompanhe erros das funções, registros das importações manuais e falhas da rotina agendada e utilização do banco. Dados de clientes, senhas e tokens não devem ser registrados nos logs.
+Execute `npm test` e `npm run build`, valide a homologação e publique no Netlify. Configure domínio próprio e HTTPS quando aprovados. Acompanhe erros das funções, registros das importações manuais e falhas de integração quando ativada e utilização do banco. Dados de clientes, senhas e tokens não devem ser registrados nos logs.
 
 Mantenha homologação e produção separadas. Mudanças no banco devem usar novas migrações, preservando a capacidade de recuperação; retornar a um deploy antigo não reverte automaticamente o banco.
