@@ -54,7 +54,7 @@ export async function startProduction(config){
   function scheduleRefresh(){clearTimeout(debounce);debounce=setTimeout(async()=>{if(busy){scheduleRefresh();return;}try{await refresh();if(!modal)render();}catch(problem){showError(problem);}},500);}
   function subscribe(){
     if(channel)client.removeChannel(channel);
-    realtime='Conectando';channel=client.channel(`workspace-${profile.id}-${selectedStore||'all'}`);
+    realtime='Conectando';channel=client.channel(`workspace-${profile.id}-${selectedStore||'all'}`,{config:{postgres_changes_options:{wait:true}}});
     for(const table of ['customers','sales','contact_tasks','profiles','sales_targets','agendas','sync_runs'])channel.on('postgres_changes',{event:'*',schema:'public',table},()=>scheduleRefresh());
     channel.subscribe(status=>{realtime=status==='SUBSCRIBED'?'Online':status==='CHANNEL_ERROR'?'Reconectando':'Conectando';const n=$('#realtime-state');if(n)n.textContent=realtime;});
   }
