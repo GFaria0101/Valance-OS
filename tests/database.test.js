@@ -4,14 +4,22 @@ import {readFile,readdir} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 let db;
 const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
-async function asUser(user,sql,params=[]){await db.exec('reset role');await db.query("select set_config('request.jwt.claim.sub',$1,false)",[id(user)]);await db.exec('set role authenticated');return db.query(sql,params);}
-async function owner(sql,params=[]){await db.exec('reset role');await db.query("select set_config('request.jwt.claim.sub','',false)");return db.query(sql,params);}
+const sessionId=(user,device=0)=>id(10000+user*100+device);
+async function asUser(user,sql,params=[],session=sessionId(user)){
+ await db.exec('reset role');
+ await db.query("select set_config('request.jwt.claim.sub',$1,false),set_config('request.jwt.claims',$2,false)",
+ [id(user),JSON.stringify({sub:id(user),role:'authenticated',session_id:session})]);
+ await db.exec('set role authenticated');return db.query(sql,params);
+}
+async function owner(sql,params=[]){await db.exec('reset role');await db.query("select set_config('request.jwt.claim.sub','',false),set_config('request.jwt.claims','{}',false)");return db.query(sql,params);}
+const startSession=(user,device=0)=>asUser(user,'select touch_app_session(false)',[],sessionId(user,device));
 before(async()=>{
  db=new PGlite();
  await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;create schema auth;
  create table auth.users(id uuid primary key,email text);
  create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
- grant usage on schema auth to authenticated,anon,service_role;grant execute on function auth.uid() to authenticated,anon,service_role;`);
+ create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims',true),'')::jsonb,'{}'::jsonb) $$;
+ grant usage on schema auth to authenticated,anon,service_role;grant execute on function auth.uid(),auth.jwt() to authenticated,anon,service_role;`);
  const migrations=new URL('../supabase/migrations/',import.meta.url);
  const migrationNames=(await readdir(migrations)).filter(name=>name.endsWith('.sql')).sort();
  for(const migration of migrationNames.filter(name=>name<'202611070003_staff_roles.sql')){
@@ -30,6 +38,8 @@ before(async()=>{
  // Exercise the role migration against existing store-bound history, as in production.
  for(const migration of migrationNames.filter(name=>name>='202611070003_staff_roles.sql')){
  await db.exec(await readFile(new URL(migration,migrations),'utf8'));}
+ // Start each signed-in fixture once. Queries never bootstrap or revive a session.
+ for(const n of [1,2,3,4,5,6,7,9])await startSession(n);
 });
 after(async()=>{await db?.close();});
 
@@ -224,6 +234,7 @@ test('today and yesterday gross use organization local dates, real closing sales
 test('selected-store teams include both organization administrators only for authorized admins',async()=>{
  await owner('insert into auth.users values($1,$2)',[id(20),'second-admin@example.test']);
  await owner("insert into profiles(id,organization_id,store_id,role,name,email) values($1,$2,null,'admin','Second Administrator',$3)",[id(20),id(100),'second-admin@example.test']);
+ await startSession(20);
  const team=async(user,store)=>(await asUser(user,'select report_snapshot($1,$2,$3) as data',[store,'2026-10-01','2026-10-20'])).rows[0].data.profiles;
  const ids=rows=>rows.map(row=>row.id).sort();
  for(const user of [1,20]){
@@ -254,6 +265,7 @@ test('staff roles preserve store history while current permissions and pending a
  await owner("insert into stores(id,organization_id,name) values($1,$2,'Old kiosk'),($3,$2,'New kiosk')",[id(210),id(200),id(211)]);
  for(const [n,store,role] of [[30,null,'admin'],[31,210,'seller'],[32,210,'manager'],[33,211,'seller'],[34,null,'admin'],[35,211,'manager']]){
  await owner('insert into profiles(id,organization_id,store_id,role,name,email,external_id) values($1,$2,$3,$4,$5,$6,$7)',[id(n),id(200),store?id(store):null,role,n===31?'Historical Seller':`Roles ${n}`,`roles${n}@example.test`,`HIST-${n}`]);}
+ for(const n of [30,31,32,33,34,35])await startSession(n);
  await owner("insert into agendas(id,organization_id,name,kind) values($1,$2,'History agenda','manual'),($3,$2,'New contacts','manual')",[id(220),id(200),id(221)]);
  await owner("insert into customers(id,organization_id,store_id,external_id,name,phone,responsible_id,last_purchase_at) values($1,$2,$3,'history-customer','History customer','5511999998888',$4,'2026-10-10T12:00:00Z')",[id(230),id(200),id(210),id(31)]);
  await owner("insert into customers(id,organization_id,store_id,external_id,name,phone,responsible_id) values($1,$2,$3,'new-store-customer','New store customer','5511999997777',$4)",[id(231),id(200),id(211),id(33)]);
@@ -345,6 +357,7 @@ test('staff roles preserve store history while current permissions and pending a
   await assert.rejects(()=>role(30,30,'manager',210),error=>error.detail==='LAST_ACTIVE_ADMIN');
   await assert.rejects(()=>asUser(30,'select set_profile_access($1,false)',[id(30)]),error=>error.detail==='LAST_ACTIVE_ADMIN');
   await asUser(30,"select provision_staff($1,null,'admin','New Administrator',$2)",[id(36),'roles36@example.test']);
+  await startSession(36);
   const demoted=await role(30,30,'manager',210);assert.equal(demoted.role,'manager');
   await assert.rejects(()=>asUser(30,'select set_profile_access($1,false)',[id(36)]),/Sem permissão/);
   await assert.rejects(()=>asUser(30,"select provision_staff($1,null,'admin','Forbidden',$2)",[id(19),'user19@example.test']),/Sem permissão/);
@@ -352,5 +365,146 @@ test('staff roles preserve store history while current permissions and pending a
   await asUser(36,'select set_profile_access($1,false)',[id(30)]);
   assert.equal((await asUser(30,'select * from profiles')).rows.length,0);
   await assert.rejects(()=>role(30,36,'manager',211),/sem acesso ativo/);
+ });
+});
+
+test('app sessions enforce idle expiry and return only authorized team presence',async t=>{
+ for(const n of [40,41,42,43,44,45,46,47,48,49])await owner('insert into auth.users values($1,$2)',[id(n),`sessions${n}@example.test`]);
+ await owner("insert into organizations(id,name) values($1,'Session company'),($2,'Foreign session company')",[id(300),id(301)]);
+ await owner("insert into stores(id,organization_id,name) values($1,$2,'Session kiosk'),($3,$2,'Second session kiosk'),($4,$5,'Foreign kiosk')",[id(310),id(300),id(311),id(312),id(301)]);
+ for(const [n,org,store,role,active] of [
+ [40,300,null,'admin',true],[41,300,310,'manager',true],[42,300,310,'seller',true],
+ [43,300,311,'seller',true],[44,301,null,'admin',true],[45,301,312,'seller',true],
+ [46,300,310,'seller',false],[47,300,310,'manager',true],[48,300,null,'admin',true],[49,300,310,'seller',true]]){
+ await owner('insert into profiles(id,organization_id,store_id,role,name,email,is_active) values($1,$2,$3,$4,$5,$6,$7)',
+ [id(n),id(org),store?id(store):null,role,`Session user ${n}`,`sessions${n}@example.test`,active]);}
+ for(const n of [40,41,42,43,44,45,47,48])await startSession(n);
+ const presence=async(user,store=null)=>(await asUser(user,'select * from team_presence($1)',[store?id(store):null])).rows;
+ const ids=rows=>rows.map(row=>row.profile_id).sort();
+ const expired=error=>error.code==='P0001'&&error.detail==='APP_SESSION_EXPIRED';
+
+ await t.test('bootstrap uses the signed session, rejects absent claims and gives clients no ledger access',async()=>{
+  assert.equal((await asUser(49,'select * from profiles')).rows.length,0);
+  await assert.rejects(()=>asUser(49,"select save_own_profile('No session','')"),expired);
+  for(const sid of [null,'not-a-uuid']){
+   await assert.rejects(()=>asUser(49,'select touch_app_session()',[],sid),error=>error.code==='42501'&&error.detail==='APP_SESSION_REQUIRED');
+   assert.equal((await asUser(49,'select * from stores',[],sid)).rows.length,0);
+  }
+  await startSession(49);
+  assert.equal((await asUser(49,'select * from profiles')).rows.length,1);
+  const result=(await asUser(49,'select touch_app_session() as session')).rows[0].session;
+  assert.deepEqual(Object.keys(result).sort(),['expires_at','last_activity_at','last_seen_at']);
+  assert.equal(Date.parse(result.expires_at)-Date.parse(result.last_activity_at),3600000);
+  assert.equal((await owner('select count(*) as n from app_sessions where session_id=$1',[sessionId(49)])).rows[0].n,1);
+  for(const sql of ['select * from app_sessions',"update app_sessions set last_activity_at=now()",'delete from app_sessions',
+   'insert into app_sessions(session_id,profile_id) values(gen_random_uuid(),auth.uid())']){
+   await assert.rejects(()=>asUser(40,sql),/permission denied/);
+  }
+  await assert.rejects(()=>asUser(49,'select private.app_session_id()'),/permission denied/);
+  await assert.rejects(()=>asUser(49,'select touch_app_session()',[],sessionId(42)),error=>error.code==='42501');
+  await assert.rejects(()=>asUser(49,'select end_app_session()',[],sessionId(42)),error=>error.code==='42501');
+  await assert.rejects(()=>asUser(46,'select touch_app_session()'),/sem acesso ativo/);
+  await db.exec('reset role;set role anon');
+  for(const sql of ['select touch_app_session()','select end_app_session()','select * from team_presence()']){
+   await assert.rejects(()=>db.query(sql),/permission denied/);
+  }
+ });
+
+ await t.test('presence follows profile/store visibility and never exposes device or timestamp metadata',async()=>{
+  assert.deepEqual(ids(await presence(40)),[40,41,42,43,46,47,48,49].map(id).sort());
+  const selected=await presence(40,310);
+  assert.deepEqual(ids(selected),[40,41,42,46,47,48,49].map(id).sort());
+  for(const row of selected)assert.deepEqual(Object.keys(row).sort(),['is_online','profile_id']);
+  assert.equal(selected.find(row=>row.profile_id===id(46)).is_online,false);
+  assert.deepEqual(ids(await presence(41)),[41,42,46,49].map(id).sort());
+  assert.deepEqual(ids(await presence(41,310)),[41,42,46,49].map(id).sort());
+  assert.deepEqual(ids(await presence(42)),[id(42)]);
+  assert.deepEqual(ids(await presence(44)),[44,45].map(id).sort());
+  await assert.rejects(()=>presence(41,311),/não autorizado/);
+  await assert.rejects(()=>presence(40,312),/não autorizado/);
+  await assert.rejects(()=>presence(42,311),/não autorizado/);
+ });
+
+ await t.test('90-second heartbeat expiry is separate from activity and any live device keeps the dot online',async()=>{
+  const online=async()=> (await presence(41)).find(row=>row.profile_id===id(42)).is_online;
+  await owner("update app_sessions set last_seen_at=clock_timestamp()-interval '90 seconds',last_activity_at=clock_timestamp()-interval '30 minutes' where session_id=$1",[sessionId(42)]);
+  assert.equal(await online(),false);
+  const before=(await owner('select last_activity_at from app_sessions where session_id=$1',[sessionId(42)])).rows[0].last_activity_at;
+  await asUser(42,'select touch_app_session(false)');
+  const after=(await owner('select last_seen_at,last_activity_at from app_sessions where session_id=$1',[sessionId(42)])).rows[0];
+  assert.equal(after.last_activity_at.toISOString(),before.toISOString());
+  assert(after.last_seen_at>after.last_activity_at);
+  assert.equal(await online(),true);
+  await asUser(42,'select touch_app_session(true)');
+  assert((await owner('select last_activity_at from app_sessions where session_id=$1',[sessionId(42)])).rows[0].last_activity_at>before);
+  await startSession(42,1);
+  await owner("update app_sessions set last_activity_at=clock_timestamp()-interval '1 hour' where session_id=$1",[sessionId(42)]);
+  assert.equal(await online(),true);
+  await asUser(42,'select end_app_session()',[],sessionId(42,1));
+  assert.equal(await online(),false);
+  for(const device of [0,1])for(const active of [false,true]){
+   await assert.rejects(()=>asUser(42,'select touch_app_session($1)',[active],sessionId(42,device)),expired);
+  }
+  await startSession(42,2);
+  assert.equal(await online(),true);
+  await owner('update profiles set is_active=false where id=$1',[id(42)]);
+  assert.equal(await online(),false);
+  await assert.rejects(()=>asUser(42,'select touch_app_session(false)',[],sessionId(42,2)),/sem acesso ativo/);
+  await owner('update profiles set is_active=true where id=$1',[id(42)]);
+ });
+
+ await t.test('one hour without interaction blocks every RLS helper and business RPC even with a valid JWT',async()=>{
+  await owner("update app_sessions set last_activity_at=clock_timestamp()-interval '59 minutes' where session_id=$1",[sessionId(40)]);
+  await asUser(40,'select touch_app_session(false)');
+  assert((await asUser(40,'select * from profiles')).rows.length>0);
+  await owner("update app_sessions set last_activity_at=clock_timestamp()-interval '1 hour',last_seen_at=clock_timestamp() where session_id=$1",[sessionId(40)]);
+  const helpers=(await asUser(40,'select private.current_org() as org,private.current_role() as role,private.can_store($1) as store,private.can_manage($1) as manage',[id(310)])).rows[0];
+  assert.deepEqual(helpers,{org:null,role:null,store:false,manage:false});
+  for(const table of ['organizations','stores','profiles','customers','agendas','contact_tasks','sales','sales_targets','sync_runs','audit_log']){
+   assert.equal((await asUser(40,`select * from ${table}`)).rows.length,0,table);
+  }
+  const guarded=[
+   ['select private.require_active()'],
+   ["select save_own_profile('Expired','')"],
+   ['select save_target($1,$2,current_date,1)',[id(310),id(42)]],
+   ['select import_presence_batch($1,$2)',[id(310),'{}']],
+   ['select assign_contacts($1,$2,1,$3)',[id(310),id(120),[id(42)]]],
+   ["select complete_contact($1,'contacted')",[id(140)]],
+   ['select generate_agenda_tasks($1,$2)',[id(310),id(120)]],
+   ["select change_staff_role($1,'manager',$2)",[id(49),id(310)]],
+   ['select set_profile_access($1,false)',[id(49)]],
+   ["select update_staff_profile($1,'Expired','','')",[id(49)]],
+   ["select provision_staff($1,$2,'seller','Expired',$3)",[id(19),id(310),'user19@example.test']],
+   ['select report_snapshot($1,current_date,current_date)',[id(310)]],
+   ['select * from team_presence()'],
+   ['select * from private.report_staff($1)',[id(310)]],
+   ['select private.sale_agenda($1)',[id(150)]],
+   ['select private.seller_contact_metrics($1,current_date,current_date)',[id(310)]],
+   ['select private.validate_report_filters($1,current_date,current_date,null,null,0)',[id(310)]]
+  ];
+  for(const [sql,params=[]] of guarded)await assert.rejects(()=>asUser(40,sql,params),expired,sql);
+  for(const active of [false,true])await assert.rejects(()=>asUser(40,'select touch_app_session($1)',[active]),expired);
+  const stale=(await owner('select last_activity_at,last_seen_at from app_sessions where session_id=$1',[sessionId(40)])).rows[0];
+  assert(stale.last_seen_at-stale.last_activity_at>=3600000);
+  await startSession(40,1);
+  assert((await asUser(40,'select * from profiles',[],sessionId(40,1))).rows.length>0);
+  // A newly authenticated device cannot restore the old session ID.
+  await assert.rejects(()=>asUser(40,'select touch_app_session(true)'),expired);
+ });
+
+ await t.test('logout is idempotent, ends only that device and tombstones even a session with no heartbeat',async()=>{
+  await startSession(49,1);
+  await asUser(49,'select end_app_session()');
+  const ended=(await owner('select ended_at from app_sessions where session_id=$1',[sessionId(49)])).rows[0].ended_at;
+  await asUser(49,'select end_app_session()');
+  assert.equal((await owner('select ended_at from app_sessions where session_id=$1',[sessionId(49)])).rows[0].ended_at.toISOString(),ended.toISOString());
+  await assert.rejects(()=>asUser(49,'select touch_app_session(true)'),expired);
+  assert.equal((await asUser(49,'select * from profiles')).rows.length,0);
+  assert.equal((await asUser(49,'select * from profiles',[],sessionId(49,1))).rows.length,1);
+  assert.equal((await presence(41)).find(row=>row.profile_id===id(49)).is_online,true);
+  await asUser(49,'select end_app_session()',[],sessionId(49,2));
+  await assert.rejects(()=>startSession(49,2),expired);
+  await asUser(49,'select end_app_session()',[],sessionId(49,1));
+  assert.equal((await presence(41)).find(row=>row.profile_id===id(49)).is_online,false);
  });
 });

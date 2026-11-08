@@ -25,6 +25,14 @@ As contas de exemplo usam endereços terminados em `@valance.invalid`, sem caixa
 
 O WhatsApp abre a conversa no aplicativo ou navegador; o envio e a confirmação do atendimento são manuais.
 
+## Conexão e saída automática
+
+Na tabela de vendedores, a bolinha verde indica uma conexão recente com o Valance OS; a cinza indica ausência de conexão recente. Passe o cursor sobre a bolinha para conferir a indicação. O status é atualizado automaticamente e pode levar até dois minutos para refletir o fechamento do navegador. A coluna Acesso continua indicando se a conta está ativa ou desativada.
+
+A sessão é encerrada após uma hora sem interação com o site. Cliques, digitação, rolagem, toque e movimento do mouse contam como atividade. Atualizações automáticas, relógio, renovação do token e recarregamento da página não reiniciam esse prazo. A atividade em outra aba do Valance OS no mesmo navegador mantém a sessão; outro navegador ou dispositivo tem seu próprio prazo.
+
+Depois da expiração é necessário entrar novamente. O servidor também bloqueia os dados da sessão expirada, mesmo que seu token de autenticação ainda esteja válido.
+
 ## Dados e limitações desta etapa
 
 - Clientes e vendas entram por CSV, usando os modelos da tela Importar dados. A importação deve ser para o quiosque correto.

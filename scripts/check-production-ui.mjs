@@ -9,7 +9,7 @@ const probe=net.createServer();await new Promise(resolve=>probe.listen(0,'127.0.
 const baseUrl=`http://127.0.0.1:${port}`;
 const server=spawn(process.execPath,['node_modules/vite/bin/vite.js','preview','--host','127.0.0.1','--port',String(port),'--strictPort','--outDir','/tmp/valance-ui-test-dist'],{stdio:'ignore'});
 const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
-const makeToken=user=>['test',Buffer.from(JSON.stringify({sub:user.id,role:'authenticated',aud:'authenticated',exp:Math.floor(Date.now()/1000)+3600})).toString('base64url'),'fixture'].join('.');
+const makeToken=(user,sessionId,time)=>['test',Buffer.from(JSON.stringify({sub:user.id,session_id:sessionId,role:'authenticated',aud:'authenticated',iat:Math.floor(time/1000),exp:Math.floor(time/1000)+3600})).toString('base64url'),'fixture'].join('.');
 const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};};
 const profile={id:id(1),organization_id:id(100),store_id:id(110),name:'Gerente de teste',email:'manager@example.test',role:'manager',is_active:true,handle:'',coupon:''};
 const seller={...profile,id:id(3),name:'Vendedor de teste',email:'seller@example.test',role:'seller',external_id:'S1'};
@@ -26,7 +26,9 @@ try{
   const context=await browser.newContext(),page=await context.newPage({viewport:{width:1440,height:1000}}),errors=[],calls=[];
   page.on('pageerror',error=>errors.push(error.message));
   await context.routeWebSocket('wss://fixture-project.supabase.co/**',socket=>socket.close());
-  let rejectReportForStore=null,releaseInvitation,invitationStarted,nextInvitationHold=null,nextReportHold=null;
+  let rejectReportForStore=null,releaseInvitation,invitationStarted,nextInvitationHold=null,nextReportHold=null,nextSessionId=1000;
+  const sessions=new Map(),refreshSessions=new Map();
+  const visibleTeam=(caller,storeId)=>caller.role==='seller'?[caller]:accounts.filter(p=>p.id===caller.id||p.store_id===storeId&&p.role==='seller'||caller.role==='admin'&&(p.role==='admin'||p.store_id===storeId));
   const invitationInFlight=new Promise(resolve=>{invitationStarted=resolve;});
   const invitationResponse=new Promise(resolve=>{releaseInvitation=resolve;});
   const mockApi=async route=>{
@@ -49,17 +51,40 @@ try{
   };
   const mockSupabase=async route=>{
     const url=new URL(route.request().url()),body=route.request().postDataJSON();
-    calls.push({path:url.pathname,search:url.search,body});
+    const time=await route.request().frame().evaluate(()=>Date.now());
+    const call={path:url.pathname,search:url.search,body,time};calls.push(call);
     let result;
-    const bearer=route.request().headers().authorization?.split(' ')[1];let caller=profile;try{const sub=JSON.parse(Buffer.from(bearer.split('.')[1],'base64url')).sub;caller=accounts.find(p=>p.id===sub)||profile;}catch{}
-    if(url.pathname==='/auth/v1/token'){const person=accounts.find(p=>p.email===body.email)||profile;result={access_token:makeToken(person),refresh_token:'test-refresh-token',expires_in:3600,token_type:'bearer',user:{id:person.id,email:person.email,aud:'authenticated',role:'authenticated',created_at:new Date().toISOString()}};}
+    const bearer=route.request().headers().authorization?.split(' ')[1];let caller=profile,sessionId;try{const claims=JSON.parse(Buffer.from(bearer.split('.')[1],'base64url'));caller=accounts.find(p=>p.id===claims.sub)||profile;sessionId=claims.session_id;}catch{}
+    call.sessionId=sessionId;
+    const expired=()=>route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({code:'P0001',details:'APP_SESSION_EXPIRED',message:'Sessão encerrada por inatividade. Entre novamente.'})});
+    const current=sessions.get(sessionId);
+    if(url.pathname.startsWith('/rest/v1/')&&!url.pathname.endsWith('/touch_app_session')&&!url.pathname.endsWith('/end_app_session')&&(!current||current.ended||time>=current.lastActivity+3600000))return expired();
+    if(url.pathname==='/auth/v1/token'){
+      const previous=url.searchParams.get('grant_type')==='refresh_token'?refreshSessions.get(body.refresh_token):null;
+      const person=previous?.person||accounts.find(p=>p.email===body.email)||profile;
+      const sid=previous?.sessionId||id(nextSessionId++),refreshToken=`fixture-refresh-${sid}`;
+      refreshSessions.set(refreshToken,{person,sessionId:sid});call.sessionId=sid;
+      result={access_token:makeToken(person,sid,time),refresh_token:refreshToken,expires_in:3600,token_type:'bearer',user:{id:person.id,email:person.email,aud:'authenticated',role:'authenticated',created_at:new Date(time).toISOString()}};
+    }
     else if(url.pathname==='/auth/v1/user')result={id:caller.id,email:caller.email,aud:'authenticated',role:'authenticated'};
+    else if(url.pathname==='/rest/v1/rpc/touch_app_session'){
+      assert(sessionId,'session touches use the authenticated JWT session ID');
+      const record=current||{profileId:caller.id,lastActivity:time,ended:false};
+      if(record.ended||time>=record.lastActivity+3600000)return expired();
+      if(body.p_active)record.lastActivity=time;record.lastSeen=time;sessions.set(sessionId,record);
+      result={last_seen_at:new Date(time).toISOString(),last_activity_at:new Date(record.lastActivity).toISOString(),expires_at:new Date(record.lastActivity+3600000).toISOString()};
+    }
+    else if(url.pathname==='/rest/v1/rpc/end_app_session'){
+      assert(sessionId,'session endings use the authenticated JWT session ID');
+      sessions.set(sessionId,{...current,profileId:caller.id,lastActivity:current?.lastActivity??time,ended:true});result=null;
+    }
+    else if(url.pathname==='/rest/v1/rpc/team_presence')result=visibleTeam(caller,body.p_store_id||caller.store_id||store.id).map(person=>({profile_id:person.id,is_online:person.id===otherAdmin.id||person.id===caller.id}));
     else if(url.pathname==='/rest/v1/profiles')result=[accounts.find(p=>url.searchParams.get('id')==='eq.'+p.id)||caller];
     else if(url.pathname==='/rest/v1/stores')result=caller.role==='admin'?[store,otherStore]:[store,otherStore].filter(row=>row.id===caller.store_id);
     else if(url.pathname==='/rest/v1/rpc/report_snapshot'){
       if(rejectReportForStore&&body.p_store_id===rejectReportForStore){rejectReportForStore=null;return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({message:'Período inválido (máximo 10 anos)'})});}
       const scopedStore=[store,otherStore].find(row=>row.id===(body.p_store_id||caller.store_id))||store;
-      const visible=caller.role==='seller'?[caller]:accounts.filter(p=>p.id===caller.id||p.store_id===scopedStore.id&&p.role==='seller'||caller.role==='admin'&&(p.role==='admin'||p.store_id===scopedStore.id));
+      const visible=visibleTeam(caller,scopedStore.id);
       result={...snapshot,profile:caller,stores:caller.role==='admin'?[store,otherStore]:[scopedStore],profiles:visible,totals:{...snapshot.totals,gross:caller.role==='admin'?9009:100}};
       if(nextReportHold?.userId===caller.id){const hold=nextReportHold;nextReportHold=null;const captured=JSON.stringify(result);hold.started.resolve();await hold.release.promise;return route.fulfill({contentType:'application/json',body:captured});}
     }
@@ -78,6 +103,8 @@ try{
   await page.locator('[name="email"]').fill(profile.email);await page.locator('[name="password"]').fill('fixture-password-only');await page.getByRole('button',{name:'Entrar',exact:true}).click();
   await page.locator('#production-greeting').waitFor();assert.match(await page.locator('main').innerText(),/R\$\s*100,00/);
   assert(calls.some(call=>call.path==='/auth/v1/token'));
+  assert(calls.findIndex(call=>call.path.endsWith('/touch_app_session'))<calls.findIndex(call=>call.path==='/rest/v1/profiles'),'session ledger is bootstrapped before profile RLS reads');
+  assert.equal(calls.find(call=>call.path.endsWith('/touch_app_session')).body.p_active,false,'initialization is passive');
   await page.locator('.workspace-trigger[data-action="menu"]').click();await page.locator('[data-action="nav:distribution"]').click();await page.locator('[name="quantity"]').fill('1');await page.locator('[name="sellers"]').check();await page.getByRole('button',{name:'Confirmar distribuição'}).click();await page.getByText('Distribuição concluída.',{exact:true}).waitFor();assert(calls.some(call=>call.path.endsWith('assign_contacts')&&call.body.p_quantity===1));
   await page.locator('.workspace-trigger[data-action="menu"]').click();await page.locator('[data-action="nav:agendas"]').click();await page.getByRole('button',{name:'Registrar atendimento',exact:true}).click();await page.locator('[name="outcome"]').selectOption('contacted');await page.getByRole('button',{name:'Confirmar',exact:true}).click();await page.getByText('Atendimento registrado.',{exact:true}).waitFor();assert(calls.some(call=>call.path.endsWith('complete_contact')&&call.body.p_outcome==='contacted'));
   const taskCall=calls.find(call=>call.path.endsWith('contact_tasks'));assert(taskCall.search.includes('due_date=gte.'));assert(taskCall.search.includes('due_date=lte.'));
@@ -126,6 +153,13 @@ try{
   assert.equal(await ownAdminRow.count(),1);assert.equal(await otherAdminRow.count(),1);
   assert.equal(await adminPage.getByRole('cell',{name:'Administrador',exact:true}).count(),2);
   assert.match(await otherAdminRow.innerText(),new RegExp(otherAdmin.name));
+  await otherAdminRow.locator(`[data-presence-profile="${otherAdmin.id}"].online`).waitFor();
+  await adminPage.getByRole('row').filter({has:adminPage.getByRole('cell',{name:seller.email,exact:true})}).locator(`[data-presence-profile="${seller.id}"].offline`).waitFor();
+  for(const [person,state] of [[otherAdmin,'Online'],[seller,'Offline']]){
+    const dot=adminPage.getByRole('row').filter({has:adminPage.getByRole('cell',{name:person.email,exact:true})}).locator(`[data-presence-profile="${person.id}"]`);
+    assert(await dot.getAttribute('title'),'presence dots expose an explanatory tooltip');assert.equal(await dot.getAttribute('aria-label'),state);
+    assert.equal(await dot.evaluate(node=>getComputedStyle(node).backgroundColor),state==='Online'?'rgb(119, 207, 98)':'rgb(113, 133, 138)','presence renders green online and gray offline');
+  }
   for(const name of ['Editar','Alterar função','Desativar','Recuperar senha'])assert.equal(await otherAdminRow.getByRole('button',{name,exact:true}).count(),1,`another administrator supports ${name}`);
   for(const name of ['Editar','Recuperar senha'])assert.equal(await ownAdminRow.getByRole('button',{name,exact:true}).count(),1,`own administrator preserves ${name}`);
   assert.equal(await ownAdminRow.getByRole('button',{name:'Desativar',exact:true}).count(),0);
@@ -200,5 +234,71 @@ try{
   assert.equal(await adminPage.locator('#production-share-text').count(),0);assert.equal(await adminPage.locator('[data-action^="role:"]').count(),0);
   await adminPage.locator('.workspace-trigger').click();await adminPage.locator('.sidebar [data-action="nav:customers"]').click();assert.equal(await adminPage.locator('[name="query"]').inputValue(),'','permission reset clears private search text');
   await adminContext.close();
-  assert.deepEqual(errors,[]);console.log('PASS production UI: mocked auth/RPC flows, mobile layout, cross-account and in-flight invitation isolation, store rollback, peer admin edits/recovery, role changes/invites and authorization cleanup with stale responses. No remote project used.');
+
+  const idleStart=Date.now();
+  async function clockLogin(time=idleStart){
+    const clockContext=await browser.newContext();
+    await clockContext.routeWebSocket('wss://fixture-project.supabase.co/**',socket=>socket.close());
+    await clockContext.route(fixtureUrl+'/**',mockSupabase);await clockContext.route(baseUrl+'/.netlify/functions/api**',mockApi);
+    const clockPage=await clockContext.newPage();clockPage.on('pageerror',error=>errors.push(error.message));
+    await clockPage.clock.install({time:new Date(time)});await clockPage.goto(baseUrl);
+    await clockPage.locator('[name="email"]').fill(profile.email);await clockPage.locator('[name="password"]').fill('fixture-password-only');await clockPage.getByRole('button',{name:'Entrar',exact:true}).click();
+    await clockPage.locator('#production-greeting').waitFor();
+    const sessionId=calls.findLast(call=>call.path==='/auth/v1/token'&&call.search.includes('grant_type=password')).sessionId;
+    return {clockContext,clockPage,sessionId};
+  }
+  // Passive heartbeats, the visible clock and an actual token refresh preserve
+  // the original inactivity deadline. Another browser keeps its own session.
+  {
+    const {clockContext,clockPage,sessionId}=await clockLogin();
+    const refreshed=clockPage.waitForResponse(response=>response.url().includes('/auth/v1/token?grant_type=refresh_token'));
+    const passiveHeartbeat=clockPage.waitForResponse(response=>response.url().endsWith('/rpc/touch_app_session')&&response.request().postDataJSON().p_active===false);
+    await clockPage.clock.fastForward(59*60000);await Promise.all([(await refreshed).finished(),(await passiveHeartbeat).finished()]);
+    assert.equal(calls.findLast(call=>call.path==='/auth/v1/token'&&call.search.includes('refresh_token')).sessionId,sessionId,'refresh preserves the signed session ID');
+    assert(calls.some(call=>call.path.endsWith('/touch_app_session')&&call.sessionId===sessionId&&!call.body.p_active&&call.time>=idleStart+58*60000),'idle heartbeat remains passive');
+    assert.equal(calls.some(call=>call.path.endsWith('/touch_app_session')&&call.sessionId===sessionId&&call.body.p_active),false,'passive clock and refresh never count as input');
+    const loggedOut=clockPage.waitForResponse(response=>response.url().includes('/auth/v1/logout'));
+    await clockPage.clock.fastForward(61000);await clockPage.getByRole('button',{name:'Entrar',exact:true}).waitFor();await (await loggedOut).finished();
+    assert.equal(await clockPage.locator('#production-greeting').count(),0);
+    assert(calls.some(call=>call.path.endsWith('/end_app_session')&&call.sessionId===sessionId));
+    assert(calls.some(call=>call.path==='/auth/v1/logout'&&call.sessionId===sessionId&&call.search==='?scope=local'),'idle logout is local to this browser session');
+    assert.equal(await second.locator('#production-greeting').count(),1,'another browser session remains signed in');
+    await clockPage.locator('[name="email"]').fill(profile.email);await clockPage.locator('[name="password"]').fill('fixture-password-only');await clockPage.getByRole('button',{name:'Entrar',exact:true}).click();
+    await clockPage.locator('#production-greeting').waitFor();
+    assert.notEqual(calls.findLast(call=>call.path==='/auth/v1/token'&&call.search.includes('grant_type=password')).sessionId,sessionId,'fresh login receives a new identity after expiry');
+    await clockContext.close();
+  }
+  // Reloading at minute 40 must retain the deadline from the original login.
+  {
+    const {clockContext,clockPage,sessionId}=await clockLogin(idleStart+10000);
+    await clockPage.clock.fastForward(40*60000);await clockPage.reload();await clockPage.locator('#production-greeting').waitFor();
+    await clockPage.clock.fastForward(21*60000);await clockPage.getByRole('button',{name:'Entrar',exact:true}).waitFor();
+    assert.equal(calls.filter(call=>call.path==='/auth/v1/token'&&call.sessionId===sessionId&&call.search.includes('grant_type=password')).length,1,'reload restores the same auth session');
+    await clockContext.close();
+  }
+  // A real input in a second tab extends the shared deadline for both tabs.
+  {
+    const {clockContext,clockPage,sessionId}=await clockLogin(idleStart+20000);
+    const activeTab=await clockContext.newPage();activeTab.on('pageerror',error=>errors.push(error.message));
+    await activeTab.goto(baseUrl);await activeTab.locator('#production-greeting').waitFor();
+    // Playwright's clock is shared by the pages in this browser context.
+    await clockPage.clock.fastForward(50*60000);
+    const activeTouch=activeTab.waitForResponse(response=>response.url().endsWith('/rpc/touch_app_session')&&response.request().postDataJSON().p_active===true);
+    await activeTab.locator('.workspace-trigger').click();await (await activeTouch).finished();
+    await clockPage.clock.fastForward(20*60000);
+    assert.equal(await clockPage.locator('#production-greeting').count(),1,'activity in another tab prevents the original one-hour logout');
+    assert.equal(calls.some(call=>call.path.endsWith('/end_app_session')&&call.sessionId===sessionId),false);
+    await clockContext.close();
+  }
+  // Simulate a suspended computer: advancing wall time does not run timers.
+  // The first trusted pointer event must check expiry before counting activity.
+  {
+    const {clockContext,clockPage,sessionId}=await clockLogin(idleStart+30000);
+    const activeBefore=calls.filter(call=>call.path.endsWith('/touch_app_session')&&call.sessionId===sessionId&&call.body.p_active).length;
+    const wakeTime=(await clockPage.evaluate(()=>Date.now()))+61*60000;await clockPage.clock.setSystemTime(new Date(wakeTime));
+    await clockPage.mouse.click(5,5);await clockPage.getByRole('button',{name:'Entrar',exact:true}).waitFor();
+    assert.equal(calls.filter(call=>call.path.endsWith('/touch_app_session')&&call.sessionId===sessionId&&call.body.p_active).length,activeBefore,'wake input cannot revive an expired session');
+    await clockContext.close();
+  }
+  assert.deepEqual(errors,[]);console.log('PASS production UI: auth/RPC flows, mobile layout, stale account/role responses, peer administration, accessible online/offline presence, passive refresh expiry, reload persistence, cross-tab activity and wake expiry. No remote project used.');
 }finally{await browser?.close();server.kill();}

@@ -1,13 +1,14 @@
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PROFILE_FIELDS='id,organization_id,store_id,role,name,email,cpf,handle,coupon,external_id,is_active';
-class ApiError extends Error{constructor(status,message){super(message);this.status=status;}}
+class ApiError extends Error{constructor(status,message,code){super(message);this.status=status;this.code=code;}}
+function sessionError(error){if(error?.details==='APP_SESSION_EXPIRED'||error?.details==='APP_SESSION_REQUIRED')throw new ApiError(401,'Sua sessão expirou por inatividade. Entre novamente.','APP_SESSION_EXPIRED');}
 function object(value){if(!value||typeof value!=='object'||Array.isArray(value))throw new ApiError(400,'Envie um objeto JSON válido.');return value;}
 function keys(value,allowed){for(const key of Object.keys(value))if(!allowed.includes(key))throw new ApiError(400,`Campo não permitido: ${key}.`);}
 function uuid(value,label){if(typeof value!=='string'||!UUID.test(value))throw new ApiError(400,`${label} inválido.`);return value;}
 function text(value,label,max=160,{optional=false}={}){if(optional&&(value===undefined||value===null||value===''))return null;if(typeof value!=='string'||!value.trim()||value.trim().length>max)throw new ApiError(400,`${label} inválido.`);return value.trim();}
 function money(value,label){if(typeof value!=='number'||!Number.isFinite(value)||value<0||value>1e12)throw new ApiError(400,`${label} deve ser um valor numérico não negativo.`);return Math.round(value*100)/100;}
 function date(value,label,{optional=false}={}){if(optional&&(value===undefined||value===null||value===''))return null;if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)||!Number.isFinite(Date.parse(value+'T12:00:00Z'))||new Date(value+'T12:00:00Z').toISOString().slice(0,10)!==value)throw new ApiError(400,`${label} inválida; use AAAA-MM-DD.`);return value;}
-function database(result){if(!result.error)return result.data;const code=result.error.code;if(code==='P0001'&&result.error.details==='LAST_ACTIVE_ADMIN')throw new ApiError(409,'Mantenha pelo menos um administrador ativo antes de rebaixar ou desativar esta conta.');if(code==='42501')throw new ApiError(403,'Você não tem permissão para esta operação.');if(code==='23505')throw new ApiError(409,'Já existe um registro com este identificador.');if(code==='P0001'||code?.startsWith('22')||code?.startsWith('23'))throw new ApiError(400,'Os dados não atendem às regras da operação. Confira vínculos, valores e identificadores.');throw new ApiError(500,'Não foi possível concluir a operação no banco de dados.');}
+function database(result){if(!result.error)return result.data;sessionError(result.error);const code=result.error.code;if(code==='P0001'&&result.error.details==='LAST_ACTIVE_ADMIN')throw new ApiError(409,'Mantenha pelo menos um administrador ativo antes de rebaixar ou desativar esta conta.');if(code==='42501')throw new ApiError(403,'Você não tem permissão para esta operação.');if(code==='23505')throw new ApiError(409,'Já existe um registro com este identificador.');if(code==='P0001'||code?.startsWith('22')||code?.startsWith('23'))throw new ApiError(400,'Os dados não atendem às regras da operação. Confira vínculos, valores e identificadores.');throw new ApiError(500,'Não foi possível concluir a operação no banco de dados.');}
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});}
 export function validateImport(payload){
   object(payload);keys(payload,['customers','sales']);
@@ -42,7 +43,10 @@ export function createApi({createClient,env=process.env}){
     const authorization=request.headers.get('authorization')||'';if(!/^Bearer [^\s]+$/.test(authorization))throw new ApiError(401,'Entre na sua conta para continuar.');
     const cfg=config(),client=createClient(cfg.url,cfg.key,{global:{headers:{Authorization:authorization}},auth:{persistSession:false,autoRefreshToken:false}});
     const auth=await client.auth.getUser(authorization.slice(7));if(auth.error||!auth.data?.user)throw new ApiError(401,'Sessão inválida ou expirada.');
+    // Bootstrap the JWT's server-owned session without counting API traffic as activity.
+    database(await client.rpc('touch_app_session',{p_active:false}));
     const meResult=await client.from('profiles').select(PROFILE_FIELDS).eq('id',auth.data.user.id).maybeSingle();
+    sessionError(meResult.error);
     if(meResult.error||!meResult.data||!meResult.data.is_active)throw new ApiError(403,'Seu acesso está desativado ou ainda não foi vinculado à empresa.');
     const me=meResult.data;
     async function scope(storeId){uuid(storeId,'Quiosque');if(!['admin','manager'].includes(me.role)||(me.role==='manager'&&storeId!==me.store_id))throw new ApiError(403,'Você não pode administrar este quiosque.');const store=database(await client.from('stores').select('id,organization_id,name').eq('id',storeId).eq('organization_id',me.organization_id).maybeSingle());if(!store||store.organization_id!==me.organization_id)throw new ApiError(403,'Quiosque não disponível para esta conta.');return store;}
@@ -78,6 +82,7 @@ export function createApi({createClient,env=process.env}){
       if(invite.error||!invite.data?.user)throw new ApiError(400,'Não foi possível enviar o convite. Verifique se o e-mail já possui acesso.');
       const id=invite.data.user.id;
       const result=await client.rpc('provision_staff',{p_user_id:id,p_store_id:storeId,p_role:data.role,p_name:name,p_email:email,p_cpf:cpf,p_external_id:external_id});
+      sessionError(result.error);
       if(result.error)return json({error:'O convite foi enviado, mas o vínculo à empresa não foi concluído. A conta permanece sem acesso até o administrador corrigir o vínculo.',code:'PROFILE_PROVISIONING_PENDING',user_id:id},409);
       return json({user_id:id,status:'invited'},201);
     }
@@ -105,5 +110,5 @@ export function createApi({createClient,env=process.env}){
       const result=await adminClient(cfg).auth.resetPasswordForEmail(target.email,{redirectTo:redirect('recovery')});if(result.error)throw new ApiError(503,'Não foi possível enviar o e-mail de recuperação. Tente novamente.');return json({status:'recovery_sent'});
     }
     throw new ApiError(404,'Operação não encontrada.');
-  }catch(error){return json({error:error instanceof ApiError?error.message:'Ocorreu uma falha ao processar a solicitação.'},error instanceof ApiError?error.status:500);}};
+  }catch(error){return json({error:error instanceof ApiError?error.message:'Ocorreu uma falha ao processar a solicitação.',...(error instanceof ApiError&&error.code?{code:error.code}:{})},error instanceof ApiError?error.status:500);}};
 }

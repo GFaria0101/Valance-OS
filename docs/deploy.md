@@ -136,3 +136,11 @@ O adaptador deverá fazer importação idempotente, registrar falhas, permitir r
 Execute `npm test` e `npm run build`, valide a homologação e publique no Netlify. Configure domínio próprio e HTTPS quando aprovados. Acompanhe erros das funções, registros das importações manuais e falhas de integração quando ativada e utilização do banco. Dados de clientes, senhas e tokens não devem ser registrados nos logs.
 
 Mantenha homologação e produção separadas. Mudanças no banco devem usar novas migrações, preservando a capacidade de recuperação; retornar a um deploy antigo não reverte automaticamente o banco.
+
+## Sessões da aplicação e presença
+
+A migração `202611080001_app_sessions.sql` associa o controle de atividade ao `session_id` assinado no JWT do Supabase. A inicialização chama `touch_app_session(false)` antes de consultar perfis. Heartbeats sem interação atualizam apenas a conexão; atividade real mantém o prazo de uma hora. Uma sessão expirada ou encerrada não pode ser reaberta por heartbeat ou refresh de token: exige novo login e novo identificador.
+
+As regras de leitura e as RPCs verificam esse controle no servidor. `team_presence` devolve somente identificadores de perfis autorizados e o indicador de conexão, sem expor dispositivos ou identificadores de sessão. O ledger não possui leitura/gravação direta para clientes. Os testes de Postgres precisam fornecer `auth.jwt().session_id` e inicializar uma sessão, como nos fixtures de `tests/database.test.js`.
+
+O logout usa o escopo local do Supabase e encerra a sessão da aplicação antes de remover a autenticação deste navegador; outras sessões do mesmo utilizador permanecem independentes.

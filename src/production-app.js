@@ -11,6 +11,7 @@ import {parseImportCSV,importHeaders} from './import-csv.js';
 import {reportTableData,renderReportPage} from './production-reports.js';
 import './production-reports.css';
 import {staffShareText,invitationShareText,agendaDayMessage} from './production-sharing.js';
+import {createSessionActivity} from './session-activity.js';
 const icons={Menu,X,Search,MessageCircle,Clock3,ArrowUpRight,CalendarDays,Users,Store,Target,Download,Check,LogOut,RefreshCw};
 const e=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icon=name=>`<i data-lucide="${name}"></i>`;
@@ -25,34 +26,95 @@ const option=(value,label,selected)=>`<option value="${e(value)}" ${value===sele
 const metric=(label,value,description='')=>`<article class="card metric"><div class="metric-label">${label}</div><strong>${value}</strong><p>${description}</p></article>`;
 class SessionChanged extends Error {constructor(){super('A sessão foi alterada.');}}
 const roleLabels={admin:'Administrador',manager:'Gerente',seller:'Vendedor'};
+function authSessionId(session){
+  try{const encoded=session.access_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');const value=JSON.parse(atob(encoded.padEnd(Math.ceil(encoded.length/4)*4,'='))).session_id;return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)?value:'';}catch{return '';}
+}
+const authIdentity=session=>session?.user?.id?`${session.user.id}:${authSessionId(session)||'missing'}`:'';
 const names={overview:'Visão geral',agendas:'Agendas do dia',distribution:'Distribuir contatos',customers:'Clientes',sales:'Painel de vendas',generated:'Gerou por agenda','by-store':'Gerou por loja',realtime:'Real Time',performance:'Dedo Duro',store:'Painel da loja',users:'Vendedores',imports:'Importar dados',profile:'Meu perfil'};
 export async function startProduction(config){
   let needsPassword=new URLSearchParams(location.search).has('auth')||/[#&]type=(recovery|invite)/.test(location.hash);
   const client=createClient(config.url,config.key,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
   let auth=null,profile=null,stores=[],staff=[],agendas=[],snapshot=null,tasks=[],customers=[],selectedStore='',route='overview',query='',taskPage=0;
   let busy=false,initializing=false,accessLoading=false,refreshVersion=0,drawer=false,channel=null,realtime='Conectando',modal='',error='',lastFocus=null;
-  let debounce,authGeneration=0,agendaDay={total:null,pending:null};
+  let debounce,authGeneration=0,agendaDay={total:null,pending:null},activityIdentity='',closingSession=null,sessionNotice='',presenceVersion=0;
+  let presenceMap=new Map(),presenceReady=false;
+  const activity=createSessionActivity({onExpired:()=>closeCurrentSession(true).catch(showError),onHeartbeat:(active,identity)=>heartbeat(active,identity)});
   const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   let to=today(),from=to.slice(0,8)+'01',sellerFilter='',agendaFilter='',minimum=0;
   const isManager=()=>['admin','manager'].includes(profile?.role);
   const authorizationChanged=next=>!next||!next.is_active||next.role!==profile?.role||next.store_id!==profile?.store_id;
   function clearWorkspace(loading=false){
-    authGeneration++;refreshVersion++;clearTimeout(debounce);
+    authGeneration++;refreshVersion++;presenceVersion++;busy=false;clearTimeout(debounce);activity.stop();activityIdentity='';presenceMap=new Map();presenceReady=false;
     profile=null;snapshot=null;tasks=[];customers=[];staff=[];stores=[];agendas=[];
     selectedStore='';sellerFilter='';agendaFilter='';minimum=0;taskPage=0;query='';error='';route='overview';modal='';drawer=false;
     agendaDay={total:null,pending:null};accessLoading=loading;
     if(channel){client.removeChannel(channel);channel=null;}
   }
   async function reloadAuthorization(){clearWorkspace(true);render();await initialize();}
+  function sessionFailure(problem){
+    if(problem?.code==='APP_SESSION_EXPIRED'||['APP_SESSION_EXPIRED','APP_SESSION_REQUIRED'].includes(problem?.details)){
+      activity.expire('server');closeCurrentSession(true).catch(showError);return true;
+    }
+    return false;
+  }
+  function checkActivity(){if(!activity.check())throw new SessionChanged();}
+  async function closeCurrentSession(expired=false){
+    const previous=auth,key=authIdentity(previous);if(!previous||!key)return;
+    if(closingSession?.key===key)return;
+    const closing={key};closingSession=closing;
+    sessionNotice=expired?'Você foi desconectado após uma hora sem atividade. Entre novamente.':'';
+    clearWorkspace(true);render();
+    try{
+      await fetch(config.url+'/rest/v1/rpc/end_app_session',{method:'POST',headers:{apikey:config.key,Authorization:'Bearer '+previous.access_token,'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(10000)});
+    }catch{/* Local logout still completes if the connection is unavailable. */}
+    if(authIdentity(auth)!==key){if(closingSession===closing)closingSession=null;return;}
+    const generation=authGeneration;
+    const result=await client.auth.signOut({scope:'local'});
+    if(generation===authGeneration&&authIdentity(auth)===key){clearWorkspace(false);auth=null;}
+    if(closingSession===closing)closingSession=null;
+    if(!auth){accessLoading=false;if(result.error&&!expired)error='A sessão local foi encerrada. Entre novamente.';render();}
+  }
+  async function prepareActivity(session,generation){
+    const key=authIdentity(session);if(!authSessionId(session)){await closeCurrentSession(true);throw new SessionChanged();}
+    const result=await client.rpc('touch_app_session',{p_active:false});
+    if(generation!==authGeneration||authIdentity(auth)!==key)throw new SessionChanged();
+    if(result.error){if(sessionFailure(result.error))throw new SessionChanged();throw new Error(result.error.message||'Não foi possível validar a sessão.');}
+    activityIdentity=key;
+    const started=activity.start({userId:session.user.id,sessionId:authSessionId(session),lastActivityAt:Date.parse(result.data.last_activity_at)});
+    if(!started)throw new SessionChanged();
+  }
+  async function heartbeat(active,identity){
+    const key=`${identity.userId}:${identity.sessionId}`,generation=authGeneration;
+    if(activityIdentity!==key||authIdentity(auth)!==key||!activity.check())return;
+    const result=await client.rpc('touch_app_session',{p_active:active});
+    if(generation!==authGeneration||activityIdentity!==key||authIdentity(auth)!==key)return;
+    if(result.error)sessionFailure(result.error);
+  }
+  function connectionState(personId){
+    const status=presenceReady?presenceMap.get(personId):undefined;
+    return status===true?{className:'online',label:'Online',title:'Online no Valance OS'}:status===false?{className:'offline',label:'Offline',title:'Sem conexão recente com o Valance OS'}:{className:'unknown',label:'Conexão não confirmada',title:'Verificando conexão'};
+  }
+  function personName(person){const state=connectionState(person.id);return `<span class="presence-person"><span class="presence-dot ${state.className}" data-presence-profile="${e(person.id)}" role="img" aria-label="${state.label}" title="${state.title}"></span>${e(person.name)}</span>`;}
+  function drawPresence(){for(const node of document.querySelectorAll('[data-presence-profile]')){const state=connectionState(node.dataset.presenceProfile);node.className='presence-dot '+state.className;node.setAttribute('aria-label',state.label);node.title=state.title;}}
+  async function loadPresence(){
+    if(!profile||!isManager()||!activity.check())return;
+    const generation=authGeneration,store=selectedStore,version=++presenceVersion;
+    const result=await client.rpc('team_presence',{p_store_id:store||null});
+    if(generation!==authGeneration||store!==selectedStore||version!==presenceVersion)return;
+    if(result.error){if(sessionFailure(result.error))return;presenceMap=new Map();presenceReady=false;}
+    else{presenceMap=new Map((result.data||[]).map(row=>[row.profile_id,row.is_online===true]));presenceReady=true;}
+    drawPresence();
+  }
+
 
   const notify=message=>{const n=$('#production-notice');if(n){n.textContent=message;n.hidden=false;}};
   const showError=problem=>{if(problem instanceof SessionChanged)return;error=problem?.message||'Não foi possível concluir a operação.';if($('#production-error'))$('#production-error').textContent=error;else render();};
-  async function rpc(name,args){const generation=authGeneration;const result=await client.rpc(name,args);if(generation!==authGeneration)throw new SessionChanged();if(result.error)throw new Error(result.error.message||'Falha ao acessar o banco.');return result.data;}
-  async function api(action,body){const generation=authGeneration,actorId=auth?.user?.id;const session=await client.auth.getSession();if(generation!==authGeneration||session.data.session?.user?.id!==actorId)throw new SessionChanged();if(!session.data.session)throw new Error('Sua sessão expirou. Entre novamente.');const response=await fetch(`/.netlify/functions/api?action=${encodeURIComponent(action)}`,{method:body?'POST':'GET',headers:{Authorization:`Bearer ${session.data.session.access_token}`,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});let data;try{data=await response.json();}catch{throw new Error('As funções do Netlify não responderam. Verifique a publicação do backend.');}if(generation!==authGeneration)throw new SessionChanged();if(!response.ok){const problem=new Error(data.error||'Operação não autorizada.');problem.code=data.code;problem.userId=data.user_id;if(problem.code==='PROFILE_PROVISIONING_PENDING'&&problem.userId)problem.message+=` Identificador para concluir o cadastro: ${problem.userId}.`;throw problem;}return data;}
+  async function rpc(name,args){checkActivity();const generation=authGeneration;const result=await client.rpc(name,args);if(generation!==authGeneration)throw new SessionChanged();if(result.error){if(sessionFailure(result.error))throw new SessionChanged();throw new Error(result.error.message||'Falha ao acessar o banco.');}return result.data;}
+  async function api(action,body){checkActivity();const generation=authGeneration,actorId=auth?.user?.id;const session=await client.auth.getSession();if(generation!==authGeneration||session.data.session?.user?.id!==actorId)throw new SessionChanged();if(!session.data.session)throw new Error('Sua sessão expirou. Entre novamente.');const response=await fetch(`/.netlify/functions/api?action=${encodeURIComponent(action)}`,{method:body?'POST':'GET',headers:{Authorization:`Bearer ${session.data.session.access_token}`,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});let data;try{data=await response.json();}catch{throw new Error('As funções do Netlify não responderam. Verifique a publicação do backend.');}if(generation!==authGeneration)throw new SessionChanged();if(!response.ok){if(sessionFailure(data))throw new SessionChanged();const problem=new Error(data.error||'Operação não autorizada.');problem.code=data.code;problem.userId=data.user_id;if(problem.code==='PROFILE_PROVISIONING_PENDING'&&problem.userId)problem.message+=` Identificador para concluir o cadastro: ${problem.userId}.`;throw problem;}return data;}
   function reportContext(){return {...snapshot,filters:{store_id:selectedStore,seller_id:sellerFilter||null,agenda_id:agendaFilter||null}};}
   function currentRows(){return reportTableData(route,reportContext());}
   async function refresh(){
-    if(!profile)return;const version=++refreshVersion,generation=authGeneration,profileId=profile.id;
+    if(!profile)return;checkActivity();const version=++refreshVersion,generation=authGeneration,profileId=profile.id;
     const taskQuery=client.from('contact_tasks').select('*,customer:customers(name,phone,do_not_contact),agenda:agendas(name)').gte('due_date',from).lte('due_date',to).order('due_date',{ascending:false}).order('id').range(taskPage*50,taskPage*50+49);
     if(selectedStore)taskQuery.eq('store_id',selectedStore);if(sellerFilter)taskQuery.eq('assigned_to',sellerFilter);if(agendaFilter)taskQuery.eq('agenda_id',agendaFilter);
     let customerQuery=client.from('customers').select('*').order('name').limit(50);if(selectedStore)customerQuery=customerQuery.eq('store_id',selectedStore);if(query)customerQuery=customerQuery.ilike('name',`%${query.replace(/[%_\\]/g,'')}%`);
@@ -63,7 +125,7 @@ export async function startProduction(config){
     if(generation!==authGeneration||profile?.id!==profileId)throw new SessionChanged();if(version!==refreshVersion)return;
     if(authorizationChanged(results[0]?.profile)){await reloadAuthorization();throw new SessionChanged();}
     for(const result of results.slice(1))if(result.error)throw new Error('Não foi possível carregar os contatos.');
-    profile=results[0].profile;snapshot=results[0];tasks=results[1].data||[];customers=results[2].data||[];agendaDay={total:results[3].count??null,pending:results[4].count??null};staff=snapshot.profiles||[];agendas=snapshot.agendas||[];
+    profile=results[0].profile;snapshot=results[0];tasks=results[1].data||[];customers=results[2].data||[];agendaDay={total:results[3].count??null,pending:results[4].count??null};staff=snapshot.profiles||[];agendas=snapshot.agendas||[];if(route==='users')loadPresence().catch(showError);
   }
   function scheduleRefresh(){clearTimeout(debounce);debounce=setTimeout(async()=>{if(busy){scheduleRefresh();return;}try{await refresh();if(!modal)render();}catch(problem){showError(problem);}},500);}
   function subscribe(){
@@ -73,12 +135,13 @@ export async function startProduction(config){
     channel.subscribe(status=>{realtime=status==='SUBSCRIBED'?'Online':status==='CHANNEL_ERROR'?'Reconectando':'Conectando';const n=$('#realtime-state');if(n)n.textContent=realtime;});
   }
   async function initialize(){
-    if(initializing)return;initializing=true;const generation=authGeneration;
+    if(initializing||closingSession?.key===authIdentity(auth)&&auth)return;initializing=true;const generation=authGeneration;
     try{
       const result=await client.auth.getSession();if(generation!==authGeneration)return;auth=result.data.session;
       if(!auth){accessLoading=false;profile=null;render();return;}
-      if(needsPassword){accessLoading=false;render();return;}
       const verified=await client.auth.getUser();if(generation!==authGeneration)return;if(verified.error||!verified.data?.user)throw new Error('Sessão inválida. Entre novamente.');
+      await prepareActivity(auth,generation);if(generation!==authGeneration)return;
+      if(needsPassword){accessLoading=false;render();return;}
       const access=await client.from('profiles').select('*').eq('id',verified.data.user.id).maybeSingle();
       if(generation!==authGeneration)return;
       if(access.error||!access.data||!access.data.is_active){accessLoading=false;profile=null;error='Sua conta não tem acesso ativo. Procure o administrador da empresa.';render();return;}
@@ -90,11 +153,11 @@ export async function startProduction(config){
   }
   function login(){
     const passwordFlow=needsPassword&&Boolean(auth);
-    $('#app').innerHTML=`<div class="login"><section class="login-story"><a class="brand" href="/">valance<span class="brand-os">OS</span></a><div><span class="eyebrow">GESTÃO QUE APROXIMA</span><h1>Boas conexões.<br>Novas possibilidades.</h1><p>Clientes, equipe e resultados em um só lugar.</p></div></section><section class="login-form-wrap"><form id="production-login"><span class="eyebrow">ACESSO À EMPRESA</span><h2>${passwordFlow?'Defina sua senha':'Vamos começar?'}</h2><p>${passwordFlow?'Escolha uma senha para sua conta.':'Use o e-mail cadastrado pelo administrador.'}</p>${passwordFlow?field('password','Nova senha','password','','required minlength="12" autocomplete="new-password"')+field('confirm','Confirme a senha','password','','required minlength="12" autocomplete="new-password"'):field('email','E-mail','email','','required autocomplete="username"')+field('password','Senha','password','','required autocomplete="current-password"')}<p class="error" id="production-error" role="alert">${e(error)}</p><button class="btn lime full" type="submit">${passwordFlow?'Salvar senha':'Entrar'}</button>${!passwordFlow?button('Esqueci minha senha','forgot','text-btn'):''}${auth?button('Sair da conta','logout','text-btn'):''}</form></section></div><div id="modal-root"></div>`;
-    $('#production-login').onsubmit=async event=>{event.preventDefault();if(busy)return;busy=true;error='';const data=new FormData(event.target);const submit=event.target.querySelector('[type=submit]');submit.disabled=true;try{
+    $('#app').innerHTML=`<div class="login"><section class="login-story"><a class="brand" href="/">valance<span class="brand-os">OS</span></a><div><span class="eyebrow">GESTÃO QUE APROXIMA</span><h1>Boas conexões.<br>Novas possibilidades.</h1><p>Clientes, equipe e resultados em um só lugar.</p></div></section><section class="login-form-wrap"><form id="production-login"><span class="eyebrow">ACESSO À EMPRESA</span><h2>${passwordFlow?'Defina sua senha':'Vamos começar?'}</h2><p>${passwordFlow?'Escolha uma senha para sua conta.':'Use o e-mail cadastrado pelo administrador.'}</p>${passwordFlow?field('password','Nova senha','password','','required minlength="12" autocomplete="new-password"')+field('confirm','Confirme a senha','password','','required minlength="12" autocomplete="new-password"'):field('email','E-mail','email','','required autocomplete="username"')+field('password','Senha','password','','required autocomplete="current-password"')}<p class="error" id="production-error" role="alert">${e(error||sessionNotice)}</p><button class="btn lime full" type="submit">${passwordFlow?'Salvar senha':'Entrar'}</button>${!passwordFlow?button('Esqueci minha senha','forgot','text-btn'):''}${auth?button('Sair da conta','logout','text-btn'):''}</form></section></div><div id="modal-root"></div>`;
+    $('#production-login').onsubmit=async event=>{event.preventDefault();if(busy)return;busy=true;const generation=authGeneration;error='';const data=new FormData(event.target);const submit=event.target.querySelector('[type=submit]');submit.disabled=true;try{
       if(passwordFlow){if(data.get('password')!==data.get('confirm'))throw new Error('As senhas devem ser iguais.');const result=await client.auth.updateUser({password:data.get('password')});if(result.error)throw result.error;needsPassword=false;history.replaceState(null,'',location.pathname);await initialize();}
       else{needsPassword=false;const result=await client.auth.signInWithPassword({email:data.get('email'),password:data.get('password')});if(result.error)throw new Error('E-mail ou senha inválidos, ou conta indisponível.');await initialize();}
-    }catch(problem){showError(problem);}finally{busy=false;submit.disabled=false;}};
+    }catch(problem){showError(problem);}finally{if(generation===authGeneration)busy=false;submit.disabled=false;}};
   }
   function reportSellers(){
     const people=new Map(staff.filter(person=>person.role==='seller').map(person=>[person.id,{id:person.id,name:person.name}]));
@@ -107,7 +170,7 @@ export async function startProduction(config){
     const t=snapshot?.totals||{};
     if(route==='profile')return `<form class="card profile-form" id="production-profile"><h2>Meu perfil</h2>${field('name','Nome','text',profile.name,'required maxlength="100"')}${field('handle','Perfil','text',profile.handle||'','maxlength="80"')}<p>${e(profile.email)} · ${e(profile.role)}</p><button type="submit" class="btn lime">Salvar alterações</button>${button('Alterar senha','change-password')}</form>`;
     if(route==='imports')return `<section class="card production-panel"><h2>Importar dados do PDV</h2><p>A conexão automática com o Presence ainda não está configurada. Importe os arquivos exportados do PDV nos modelos abaixo. Os dados confirmados são atualizados para os usuários conectados.</p><div class="actions">${button('Modelo de clientes','template:customers')}${button('Modelo de vendas','template:sales')}</div><form id="production-import"><label>Conteúdo<select name="kind"><option value="customers">Clientes</option><option value="sales">Vendas</option></select></label><label>Arquivo CSV (até 500 linhas / 1 MB)<input name="file" type="file" accept=".csv,text/csv" required></label><p>Cadastre o código do vendedor no PDV antes de importar vendas. Datas de venda devem incluir horário e fuso. Importações com o mesmo código atualizam o registro existente.</p><button class="btn lime" type="submit">Validar e importar para ${e(stores.find(s=>s.id===selectedStore)?.name)}</button></form><h3>Última sincronização</h3><p>${snapshot?.latest_sync?`Status: ${e(snapshot.latest_sync.status)} · ${e(new Date(snapshot.latest_sync.started_at).toLocaleString('pt-BR'))}`:'Nenhuma importação registrada.'}</p></section>`;
-    if(route==='users')return `<section class="card"><div class="card-heading"><h2>${profile.role==='admin'?'Equipe do quiosque e administradores':'Equipe do quiosque'}</h2><div class="actions">${button('Compartilhar lista','share-users')}${isManager()?button('Convidar funcionário','invite','lime'):''}</div></div>${table(['Nome','E-mail','Função','Código PDV','Acesso','Ações'],staff.map(p=>[e(p.name),e(p.email),e(roleLabels[p.role]||p.role),e(p.external_id||'—'),p.is_active?'Ativo':'Desativado',(profile.role==='admin'||profile.role==='manager'&&p.role==='seller')?`<div class="actions">${button('Editar','edit:'+p.id,'small')}${profile.role==='admin'?button('Alterar função','role:'+p.id,'small'):''}${p.id!==profile.id?button(p.is_active?'Desativar':'Reativar','access:'+p.id,'small'):''}${button('Recuperar senha','reset:'+p.id,'small')}</div>`:'']))}</section>`;
+    if(route==='users')return `<section class="card"><div class="card-heading"><h2>${profile.role==='admin'?'Equipe do quiosque e administradores':'Equipe do quiosque'}</h2><p class="presence-legend"><span class="presence-dot online" aria-hidden="true"></span> Online <span class="presence-dot offline" aria-hidden="true"></span> Offline</p><div class="actions">${button('Compartilhar lista','share-users')}${isManager()?button('Convidar funcionário','invite','lime'):''}</div></div>${table(['Nome','E-mail','Função','Código PDV','Acesso','Ações'],staff.map(p=>[personName(p),e(p.email),e(roleLabels[p.role]||p.role),e(p.external_id||'—'),p.is_active?'Ativo':'Desativado',(profile.role==='admin'||profile.role==='manager'&&p.role==='seller')?`<div class="actions">${button('Editar','edit:'+p.id,'small')}${profile.role==='admin'?button('Alterar função','role:'+p.id,'small'):''}${p.id!==profile.id?button(p.is_active?'Desativar':'Reativar','access:'+p.id,'small'):''}${button('Recuperar senha','reset:'+p.id,'small')}</div>`:'']))}</section>`;
     if(route==='customers')return `<section class="card"><form id="production-customer-search" class="card-heading"><label>Buscar clientes<input name="query" value="${e(query)}" placeholder="Nome do cliente"></label><button class="btn" type="submit">Buscar</button></form>${table(['Cliente','Telefone','Aniversário','Última compra'],customers.map(c=>[e(c.name),e(c.phone),e(c.birth_date||'—'),e(c.last_purchase_at?new Date(c.last_purchase_at).toLocaleDateString('pt-BR'):'—')]))}<p class="report-footnote">Até 50 resultados por busca. O acesso aos clientes respeita sua carteira e seu quiosque.</p></section>`;
     if(route==='distribution')return `<section class="card production-panel"><h2>Distribuir contatos</h2><p>A distribuição é confirmada no banco e preserva tarefas já atribuídas.</p><form id="production-distribution"><label>Agenda<select name="agenda_id" required>${agendas.map(a=>option(a.id,a.name)).join('')}</select></label>${field('quantity','Quantidade','number',10,'required min="1" max="500"')}<fieldset><legend>Vendedores ativos</legend>${staff.filter(s=>s.role==='seller'&&s.is_active&&s.store_id===selectedStore).map(s=>`<label class="seller-check"><input type="checkbox" name="sellers" value="${s.id}">${e(s.name)}</label>`).join('')}</fieldset><button class="btn lime" type="submit">Confirmar distribuição</button></form><form id="production-generate"><label>Gerar tarefas da agenda<select name="agenda_id" required>${agendas.map(a=>option(a.id,a.name)).join('')}</select></label><p>Gera os contatos elegíveis conforme a regra da agenda, sem duplicar tarefas existentes.</p><button class="btn" type="submit">Gerar contatos</button></form></section>`;
     if(route==='agendas'){const status=agendaDayMessage(agendaDay);return `${status?`<section class="card production-panel agenda-day-status"><h2>${e(status.title)}</h2><p>${e(status.description)}</p></section>`:''}<section class="card"><div class="card-heading"><h2>Contatos e atendimentos</h2><span>${number(t.contacts_completed)} realizados no período</span></div>${tasks.length?table(['Cliente','Agenda','Data','Situação','Ações'],tasks.map(task=>[e(task.customer?.name||'Cliente'),e(task.agenda?.name||'Agenda'),e(task.due_date),task.status==='completed'?'Realizado':'Pendente',`<div class="actions">${!task.customer?.do_not_contact?button(task.customer?.phone?'WhatsApp':'Informar número','contact-whatsapp:'+task.id,'small'):''}${task.status!=='completed'?button('Registrar atendimento','complete:'+task.id,'small lime'):''}</div>`])):'<div class="empty">Não há contatos nesta página. O gerente pode importar clientes e gerar as agendas.</div>'}<div class="table-footer">Página ${taskPage+1}<span>${taskPage?button('Anterior','task-prev','small'):''}${tasks.length===50?button('Próxima','task-next','small'):''}</span></div></section>`;}
@@ -116,18 +179,18 @@ export async function startProduction(config){
 
   function render(){
     document.documentElement.dataset.theme=localStorage.getItem('valance-theme')||'dark';
-    if(accessLoading&&auth&&!needsPassword){$('#app').innerHTML='<main class="production-access-loading" role="status"><h1>Atualizando seu acesso</h1><p>Aguarde um momento.</p></main><div id="modal-root"></div>';return;}
+    if(accessLoading&&auth&&!needsPassword){$('#app').innerHTML=`<main class="production-access-loading" role="status"><h1>${closingSession?.key===authIdentity(auth)?'Encerrando sessão':'Atualizando seu acesso'}</h1><p>Aguarde um momento.</p></main><div id="modal-root"></div>`;return;}
     if(!auth||!profile||needsPassword){login();return;}
     if(!isManager()&&['distribution','imports','users','by-store','store'].includes(route))route='overview';
     const routes=Object.entries(names).filter(([name])=>isManager()||!['distribution','imports','users','by-store','store'].includes(name));
     $('#app').innerHTML=`<aside class="sidebar ${drawer?'production-drawer-open':''}" aria-label="Workspace"><button class="icon-btn drawer-close" data-action="menu" aria-label="Fechar menu">${icon('x')}</button><a class="brand" href="/">valance<span class="brand-os">OS</span></a><div class="workspace"><div><b>${e(stores.find(s=>s.id===selectedStore)?.name||'Empresa')}</b><span>${e(profile.role)}</span></div></div><nav>${routes.map(([key,name])=>`<button class="nav-item ${route===key?'active':''}" data-action="nav:${key}">${e(name)}</button>`).join('')}</nav><div class="sidebar-bottom">${button('Alternar tema','theme')}${button('Sair da conta','logout')}</div></aside>${drawer?'<button class="mobile-shade production-shade" data-action="menu" aria-label="Fechar menu"></button>':''}<div class="main-shell"><header class="topbar"><a class="brand header-brand" href="/">valance<span class="brand-os">OS</span></a>${toolbar()}<button class="workspace-trigger user-menu" data-action="menu">${e(profile.name)} ${icon('menu')}</button></header><main><div class="page-title"><div><span class="eyebrow">${e(stores.find(s=>s.id===selectedStore)?.name||'Workspace')}</span><h1>${route==='overview'?`<span id="production-greeting"></span>`:e(names[route])}</h1></div><span class="tag" id="realtime-state">${e(realtime)}</span></div><div class="production-source">Presence não conectado · Entrada por importação CSV · Atualização interna em tempo real</div><p id="production-error" class="error" role="alert">${e(error)}</p><p id="production-notice" class="success-notice" role="status" hidden></p>${!['profile','users'].includes(route)?filters():''}${content()}</main><footer>Valance OS · ${e(profile.role)}</footer></div><div id="modal-root"></div>`;
-    createIcons({icons});bind();updateClock();
+    createIcons({icons});bind();updateClock();drawPresence();
   }
   function dialog(title,body,formId=''){
     lastFocus=document.activeElement;modal=title;$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="production-dialog-title"><button class="modal-close icon-btn" data-action="close" aria-label="Fechar">${icon('x')}</button><h2 id="production-dialog-title">${e(title)}</h2>${formId?`<form id="${formId}">${body}<p class="error dialog-error" role="alert"></p><button class="btn lime full" type="submit">Confirmar</button></form>`:body}</section></div>`;createIcons({icons});($('.modal input')||$('.modal button'))?.focus();
   }
   function closeDialog(){modal='';$('#modal-root').innerHTML='';lastFocus?.focus();}
-  function handleForm(id,fn){const form=$('#'+id);if(form)form.onsubmit=async event=>{event.preventDefault();if(busy)return;busy=true;const submit=form.querySelector('[type=submit]');if(submit)submit.disabled=true;try{await fn(new FormData(form));}catch(problem){const node=form.querySelector('.dialog-error');if(node)node.textContent=problem.message;else showError(problem);}finally{busy=false;if(submit)submit.disabled=false;}};}
+  function handleForm(id,fn){const form=$('#'+id);if(form)form.onsubmit=async event=>{event.preventDefault();if(busy)return;busy=true;const generation=authGeneration;const submit=form.querySelector('[type=submit]');if(submit)submit.disabled=true;try{await fn(new FormData(form));}catch(problem){const node=form.querySelector('.dialog-error');if(node)node.textContent=problem.message;else showError(problem);}finally{if(generation===authGeneration)busy=false;if(submit)submit.disabled=false;}};}
   function bind(){
     handleForm('production-filters',async data=>{
       if(data.get('from')>data.get('to'))throw new Error('A data inicial deve ser anterior à final.');
@@ -157,12 +220,13 @@ export async function startProduction(config){
     role.onchange=update;update();
   }
   async function action(name,arg){
+    if(auth&&closingSession?.key===authIdentity(auth))return;
     if(busy&&!['close','menu','theme'].includes(name))throw new Error('Aguarde a operação em andamento.');
     if(name==='menu'){drawer=!drawer;render();}
     else if(name==='theme'){localStorage.setItem('valance-theme',document.documentElement.dataset.theme==='dark'?'light':'dark');render();}
     else if(name==='nav'){route=arg;drawer=false;error='';await refresh();render();}
     else if(name==='close')closeDialog();
-    else if(name==='logout'){const generation=authGeneration;const result=await client.auth.signOut();if(result.error)throw new Error('Não foi possível sair da conta. Tente novamente.');if(generation===authGeneration){clearWorkspace(false);auth=null;render();}}
+    else if(name==='logout')await closeCurrentSession(false);
     else if(name==='forgot'){
       dialog('Recuperar senha',field('email','E-mail','email','','required'),'recovery-form');handleForm('recovery-form',async data=>{const r=await client.auth.resetPasswordForEmail(data.get('email'),{redirectTo:location.origin+'/?auth=recovery'});if(r.error)throw new Error('Não foi possível solicitar a recuperação. Tente novamente mais tarde.');$('.modal form').innerHTML='<p>Se o e-mail estiver cadastrado e apto à recuperação, você receberá as instruções.</p>';});
     }
@@ -226,21 +290,22 @@ export async function startProduction(config){
   function updateClock(){if($('#production-clock'))$('#production-clock').textContent=new Date().toLocaleTimeString('pt-BR');if($('#production-greeting'))$('#production-greeting').textContent=`${greetingForHour(new Date().getHours())}, ${profile?.name?.split(' ')[0]||''}.`;}
   setInterval(updateClock,1000);
   async function verifyAccess(force=false){
-    if(!profile||document.hidden&&!force)return;
+    if(!profile||document.hidden&&!force)return;checkActivity();
     const previous=profile,generation=authGeneration;
     const result=await client.from('profiles').select('id,is_active,role,store_id').eq('id',previous.id).maybeSingle();
     if(generation!==authGeneration)return;
-    if(result.error||!result.data||!result.data.is_active){clearWorkspace(false);error='Seu acesso não está disponível. Entre novamente ou procure o administrador.';render();}
+    if(result.error||!result.data||!result.data.is_active){const sessionCheck=await client.rpc('touch_app_session',{p_active:false});if(generation!==authGeneration)return;if(sessionCheck.error&&sessionFailure(sessionCheck.error))return;clearWorkspace(false);error='Seu acesso não está disponível. Entre novamente ou procure o administrador.';render();}
     else if(authorizationChanged(result.data))await reloadAuthorization();
   }
   setInterval(()=>verifyAccess().catch(showError),60000);
+  setInterval(()=>{if(route==='users'&&!document.hidden)loadPresence().catch(showError);},30000);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden&&auth)verifyAccess().catch(showError);});
   client.auth.onAuthStateChange((event,session)=>{
-    const changed=auth?.user?.id!==session?.user?.id;
+    const changed=auth?.user?.id!==session?.user?.id||authIdentity(auth)!==authIdentity(session);
     if(changed||event==='SIGNED_OUT')clearWorkspace(Boolean(session));
-    auth=session;if(event==='PASSWORD_RECOVERY')needsPassword=true;
+    auth=session;if(changed&&session)sessionNotice='';if(event==='PASSWORD_RECOVERY')needsPassword=true;
     if(changed||event==='SIGNED_OUT')render();
-    if(session&&(changed||['SIGNED_IN','PASSWORD_RECOVERY'].includes(event)))setTimeout(initialize,0);
+    if(session&&closingSession?.key!==authIdentity(session)&&(changed||['SIGNED_IN','PASSWORD_RECOVERY'].includes(event)))setTimeout(initialize,0);
   });
   render();await initialize();
 }
