@@ -4,11 +4,11 @@ import {createApi,validateImport} from '../netlify/functions/_shared/api-handler
 import {createSyncJob} from '../netlify/functions/_shared/sync-job.js';
 const ids={actor:'11111111-1111-4111-8111-111111111111',store:'22222222-2222-4222-8222-222222222222',other:'33333333-3333-4333-8333-333333333333',org:'44444444-4444-4444-8444-444444444444',target:'55555555-5555-4555-8555-555555555555'};
 const env={SUPABASE_URL:'https://test.supabase.co',SUPABASE_ANON_KEY:'public-key',SUPABASE_SERVICE_ROLE_KEY:'server-key',APP_URL:'https://valance.example'};
-function fixture({role='admin',active=true,authError=false,targetRole='seller'}={}){
+function fixture({role='admin',active=true,authError=false,targetRole='seller',targetOrg=ids.org,targetStore=ids.store,storeOrg=ids.org,rpcError=null,authUpdateError=null}={}){
  const calls=[],me={id:ids.actor,organization_id:ids.org,store_id:role==='admin'?null:ids.store,role,name:'Gerente',email:'manager@example.com',is_active:active};
- function query(table){const state={table};const q={select(){return q;},eq(k,v){state[k]=v;return q;},order(){return q;},limit(){return q;},maybeSingle:async()=>({data:table==='profiles'?(state.id===ids.actor?me:{id:ids.target,organization_id:ids.org,store_id:ids.store,role:targetRole,email:'staff@example.com',is_active:true}):table==='stores'?{id:state.id,organization_id:ids.org}: {id:ids.org,name:'Empresa',timezone:'America/Sao_Paulo'},error:null}),insert:async data=>{calls.push(['insert',table,data]);return {data:null,error:null};},then(resolve,reject){return Promise.resolve({data:table==='stores'?[{id:ids.store,organization_id:ids.org}]:[],error:null}).then(resolve,reject);}};return q;}
- const client={auth:{getUser:async()=>({data:{user:authError?null:{id:ids.actor}},error:authError?{}:null})},from:query,rpc:async(name,args)=>{calls.push(['rpc',name,args]);return {data:{ok:true},error:null};}};
- const service={auth:{admin:{inviteUserByEmail:async(email,options)=>{calls.push(['invite',email,options]);return {data:{user:{id:ids.target}},error:null};},deleteUser:async id=>{calls.push(['delete',id]);return {error:null};},updateUserById:async(id,data)=>{calls.push(['ban',id,data]);return {error:null};}},resetPasswordForEmail:async(email,options)=>{calls.push(['reset',email,options]);return {error:null};}},from:query};
+ function query(table){const state={table};const q={select(){return q;},eq(k,v){state[k]=v;return q;},order(){return q;},limit(){return q;},maybeSingle:async()=>({data:table==='profiles'?(state.id===ids.actor?me:{id:ids.target,organization_id:targetOrg,store_id:targetRole==='admin'?null:targetStore,role:targetRole,email:'staff@example.com',is_active:true}):table==='stores'?{id:state.id,organization_id:storeOrg}: {id:ids.org,name:'Empresa',timezone:'America/Sao_Paulo'},error:null}),insert:async data=>{calls.push(['insert',table,data]);return {data:null,error:null};},then(resolve,reject){return Promise.resolve({data:table==='stores'?[{id:ids.store,organization_id:ids.org}]:[],error:null}).then(resolve,reject);}};return q;}
+ const client={auth:{getUser:async()=>({data:{user:authError?null:{id:ids.actor}},error:authError?{}:null})},from:query,rpc:async(name,args)=>{calls.push(['rpc',name,args]);return {data:rpcError?null:{ok:true},error:rpcError};}};
+ const service={auth:{admin:{inviteUserByEmail:async(email,options)=>{calls.push(['invite',email,options]);return {data:{user:{id:ids.target}},error:null};},deleteUser:async id=>{calls.push(['delete',id]);return {error:null};},updateUserById:async(id,data)=>{calls.push(['ban',id,data]);return {error:authUpdateError};}},resetPasswordForEmail:async(email,options)=>{calls.push(['reset',email,options]);return {error:null};}},from:query};
  return {calls,api:createApi({env,createClient:(_url,key)=>{calls.push(['client',key==='server-key'?'service':'user']);return key==='server-key'?service:client;}})};
 }
 const request=(action,body,extra={})=>new Request(`https://valance.example/.netlify/functions/api?action=${action}`,{method:body===undefined?'GET':'POST',headers:{authorization:'Bearer valid-token',...(body===undefined?{}:{'content-type':'application/json'}),...extra},...(body===undefined?{}:{body:JSON.stringify(body)})});
@@ -56,8 +56,74 @@ test('invitation provisions profile through authenticated RPC and never returns 
 test('staff edit allows empty optional handle and coupon as database empty strings',async()=>{
  const f=fixture();const response=await f.api(request('update-user',{user_id:ids.target,name:'Nome atualizado',handle:'',coupon:'',external_id:'PDV-1'}));assert.equal(response.status,200);const call=f.calls.find(c=>c[0]==='rpc'&&c[1]==='update_staff_profile');assert.equal(call[2].p_handle,'');assert.equal(call[2].p_coupon,'');assert.equal(call[2].p_external_id,'PDV-1');
 });
-test('deactivation first applies DB permission gate and then bans authentication',async()=>{
- const f=fixture();assert.equal((await f.api(request('set-access',{user_id:ids.target,is_active:false}))).status,200);assert(f.calls.findIndex(c=>c[0]==='rpc'&&c[1]==='set_profile_access')<f.calls.findIndex(c=>c[0]==='ban'));assert.equal(f.calls.find(c=>c[0]==='ban')[2].ban_duration,'876000h');
+test('deactivation changes only the authoritative database profile and never creates an Auth ban',async()=>{
+ const f=fixture();assert.equal((await f.api(request('set-access',{user_id:ids.target,is_active:false}))).status,200);assert.deepEqual(f.calls.find(c=>c[0]==='rpc'),['rpc','set_profile_access',{p_profile_id:ids.target,p_active:false}]);assert(!f.calls.some(c=>c[0]==='ban'||c[0]==='client'&&c[1]==='service'));
+});
+test('reactivation clears legacy Auth bans after the database gate and reports failures as pending',async()=>{
+ const f=fixture();assert.equal((await f.api(request('set-access',{user_id:ids.target,is_active:true}))).status,200);assert(f.calls.findIndex(c=>c[0]==='rpc')<f.calls.findIndex(c=>c[0]==='ban'));assert.deepEqual(f.calls.find(c=>c[0]==='ban'),['ban',ids.target,{ban_duration:'none'}]);
+ const failing=fixture({authUpdateError:{message:'private server-key'}});const response=await failing.api(request('set-access',{user_id:ids.target,is_active:true}));assert.equal(response.status,503);const body=await response.json();assert.equal(body.code,'AUTH_UPDATE_PENDING');assert.equal(body.database_active,true);assert.doesNotMatch(JSON.stringify(body),/private|server-key/);
+ const denied=fixture({rpcError:{code:'42501',message:'private error'}});assert.equal((await denied.api(request('set-access',{user_id:ids.target,is_active:true}))).status,403);assert(!denied.calls.some(c=>c[0]==='ban'));
+});
+test('administrator can edit, recover and deactivate another administrator within the same organization',async()=>{
+ const f=fixture({targetRole:'admin'});
+ assert.equal((await f.api(request('update-user',{user_id:ids.target,name:'Outro administrador',handle:'',coupon:''}))).status,200);
+ const reset=await f.api(request('reset-user',{user_id:ids.target}));assert.equal(reset.status,200);assert.deepEqual(await reset.json(),{status:'recovery_sent'});
+ const recovery=f.calls.find(c=>c[0]==='reset');assert.equal(recovery[1],'staff@example.com');assert.equal(recovery[2].redirectTo,'https://valance.example/?auth=recovery');
+ assert.equal((await f.api(request('set-access',{user_id:ids.target,is_active:false}))).status,200);
+ assert(f.calls.some(c=>c[0]==='rpc'&&c[1]==='set_profile_access'));
+ assert.equal((await f.api(request('reset-user',{user_id:ids.target,email:'attacker@example.com'}))).status,400,'recovery recipient cannot be overridden');
+ assert.equal(f.calls.filter(c=>c[0]==='reset').length,1);
+});
+test('administrator invitation accepts an organization role with null store and never returns credentials',async()=>{
+ const f=fixture();const response=await f.api(request('invite-user',{store_id:null,email:'Admin@Example.com',name:'Novo administrador',role:'admin'}));
+ assert.equal(response.status,201);assert.deepEqual(await response.json(),{user_id:ids.target,status:'invited'});
+ const rpc=f.calls.find(c=>c[0]==='rpc'&&c[1]==='provision_staff');assert.equal(rpc[2].p_store_id,null);assert.equal(rpc[2].p_role,'admin');assert.equal(rpc[2].p_email,'admin@example.com');
+ assert(!f.calls.some(c=>c[0]==='insert'));
+});
+test('role changes use the authenticated database RPC for promotions and demotions without Auth metadata mutations',async()=>{
+ for(const [role,store_id]of [['admin',null],['manager',ids.store],['seller',ids.store]]){
+   const f=fixture({targetRole:'admin'});const response=await f.api(request('change-role',{user_id:ids.target,role,store_id}));assert.equal(response.status,200);
+   assert.deepEqual(f.calls.find(c=>c[0]==='rpc'),['rpc','change_staff_role',{p_profile_id:ids.target,p_role:role,p_store_id:store_id}]);
+   assert(!f.calls.some(c=>c[0]==='client'&&c[1]==='service'));
+   const output=await response.text();assert.doesNotMatch(output,/server-key|valid-token|password|access_token|refresh_token/);
+ }
+});
+test('manager and seller cannot promote, invite or manage administrators',async()=>{
+ for(const role of ['manager','seller']){
+   const f=fixture({role,targetRole:'admin'});
+   for(const [action,body]of [['change-role',{user_id:ids.target,role:'admin',store_id:null}],['invite-user',{email:'a@example.com',name:'A',role:'admin',store_id:null}],['update-user',{user_id:ids.target,name:'A',handle:'',coupon:''}],['reset-user',{user_id:ids.target}],['set-access',{user_id:ids.target,is_active:false}]])assert.equal((await f.api(request(action,body))).status,403,`${role} cannot ${action}`);
+   assert(!f.calls.some(c=>['rpc','invite','reset','ban'].includes(c[0])));assert(!f.calls.some(c=>c[0]==='client'&&c[1]==='service'));
+ }
+ const manager=fixture({role:'manager',targetStore:ids.other});assert.equal((await manager.api(request('update-user',{user_id:ids.target,name:'A'}))).status,403);
+});
+test('cross-organization staff and destination stores are rejected before any mutation or recovery',async()=>{
+ const f=fixture({targetOrg:ids.other,targetRole:'admin'});
+ for(const [action,body]of [['change-role',{user_id:ids.target,role:'seller',store_id:ids.store}],['update-user',{user_id:ids.target,name:'A'}],['reset-user',{user_id:ids.target}],['set-access',{user_id:ids.target,is_active:false}]])assert.equal((await f.api(request(action,body))).status,403);
+ assert(!f.calls.some(c=>['rpc','invite','reset','ban'].includes(c[0])));
+ const foreignStore=fixture({storeOrg:ids.other});assert.equal((await foreignStore.api(request('change-role',{user_id:ids.target,role:'seller',store_id:ids.store}))).status,403);assert(!foreignStore.calls.some(c=>c[0]==='rpc'));
+});
+test('role and store assignments reject malformed values and unknown authority fields',async()=>{
+ const invalid=[{role:'superadmin',store_id:null},{role:"admin;drop table profiles",store_id:null},{role:'admin',store_id:ids.store},{role:'admin'},{role:'manager',store_id:null},{role:'seller',store_id:['bad']},{role:'seller',store_id:'not-a-uuid'},{role:'seller',store_id:ids.store,organization_id:ids.other}];
+ for(const assignment of invalid){
+   const change=fixture();assert.equal((await change.api(request('change-role',{user_id:ids.target,...assignment}))).status,400);assert(!change.calls.some(c=>c[0]==='rpc'));
+   const invite=fixture();assert.equal((await invite.api(request('invite-user',{name:'A',email:'a@example.com',...assignment}))).status,400);assert(!invite.calls.some(c=>c[0]==='invite'));
+ }
+ assert.equal((await fixture().api(request('change-role',{user_id:'invalid',role:'admin',store_id:null}))).status,400);
+});
+test('database last-administrator guards block role and access changes without leaking raw database messages',async()=>{
+ const f=fixture({targetRole:'admin',rpcError:{code:'P0001',message:'last admin; password=private-secret; server-key'}});
+ for(const [action,body]of [['change-role',{user_id:ids.target,role:'seller',store_id:ids.store}],['set-access',{user_id:ids.target,is_active:false}]]){
+   const response=await f.api(request(action,body));assert.equal(response.status,400);assert.doesNotMatch(await response.text(),/password|private-secret|server-key|last admin/);
+ }
+ assert(!f.calls.some(c=>c[0]==='ban'));
+});
+test('last active administrator detail maps only the exact trusted marker to a friendly conflict',async()=>{
+ const f=fixture({targetRole:'admin',rpcError:{code:'P0001',details:'LAST_ACTIVE_ADMIN',message:'private database data'}});
+ for(const [action,body]of [['change-role',{user_id:ids.target,role:'seller',store_id:ids.store}],['set-access',{user_id:ids.target,is_active:false}]]){
+   const response=await f.api(request(action,body));assert.equal(response.status,409);assert.deepEqual(await response.json(),{error:'Mantenha pelo menos um administrador ativo antes de rebaixar ou desativar esta conta.'});
+ }
+ assert(!f.calls.some(c=>c[0]==='ban'));
+ const arbitrary=fixture({rpcError:{code:'P0001',details:'LAST_ACTIVE_ADMIN private suffix',message:'private data'}});const response=await arbitrary.api(request('change-role',{user_id:ids.target,role:'seller',store_id:ids.store}));assert.equal(response.status,400);assert.doesNotMatch(await response.text(),/private|LAST_ACTIVE_ADMIN/);
 });
 test('unsafe origin, missing configuration and unsupported actions fail closed',async()=>{
  const f=fixture();assert.equal((await f.api(request('import-presence',{}, {origin:'https://attacker.example'}))).status,403);assert.equal((await f.api(request('unknown'))).status,404);

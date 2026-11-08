@@ -20,6 +20,8 @@ As contas de exemplo usam endereços terminados em `@valance.invalid`, sem caixa
 6. Nas agendas, registre um atendimento e confirme a atualização dos indicadores.
 7. Abra o WhatsApp pelo cabeçalho e informe um número de teste autorizado. Os clientes fictícios não possuem telefones reais.
 8. Edite um funcionário fictício, confira as permissões e compartilhe a lista quando necessário.
+9. Como administrador, use **Alterar função** para promover ou rebaixar alguém. Administrador acessa os dois quiosques; gerente e vendedor exigem a escolha de um quiosque. Vendas e atendimentos anteriores permanecem no histórico.
+10. Para editar outro administrador ou solicitar a recuperação dele, use os botões da própria linha. A recuperação envia o link ao e-mail do titular. A empresa precisa manter pelo menos um administrador ativo.
 
 O WhatsApp abre a conversa no aplicativo ou navegador; o envio e a confirmação do atendimento são manuais.
 

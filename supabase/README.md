@@ -4,7 +4,7 @@ O banco usa Supabase Auth + PostgreSQL. As regras de acesso são verificadas pel
 
 ## Aplicar
 
-Use um projeto Supabase dedicado. Aplique os arquivos de `migrations/` na ordem do nome, com o runner de migrações Supabase ou pelo editor SQL com uma conta administrativa. A inicial, `202610250001_initial.sql`, cria apenas a estrutura e as regras, sem usuários, senhas ou informações comerciais fictícias. `202611070001_report_details.sql` amplia os agregados dos relatórios e preserva as permissões. `202611070002_team_administrators.sql` mantém os administradores da empresa na lista de equipe ao selecionar um quiosque, respeitando a visibilidade definida pela RLS.
+Use um projeto Supabase dedicado. Aplique os arquivos de `migrations/` na ordem do nome, com o runner de migrações Supabase ou pelo editor SQL com uma conta administrativa. A inicial, `202610250001_initial.sql`, cria apenas a estrutura e as regras, sem usuários, senhas ou informações comerciais fictícias. `202611070001_report_details.sql` amplia os agregados dos relatórios e preserva as permissões. `202611070002_team_administrators.sql` mantém os administradores da empresa na lista de equipe ao selecionar um quiosque, respeitando a visibilidade definida pela RLS. `202611070003_staff_roles.sql` permite administrar funções e transferências preservando o histórico comercial.
 
 1. Aplique todas as migrações, na ordem.
 2. Em **Authentication → Users**, convide o proprietário usando o e-mail real dele. Não use inscrição pública para provisionar equipes.
@@ -26,6 +26,16 @@ Não execute o bootstrap de produção em uma base de homologação, ou vice-ver
 Os clientes recebem apenas SELECT por políticas RLS. Não podem alterar diretamente tabelas comerciais, perfis ou permissões. As mutações passam por funções que validam papel, organização, loja e parâmetros. Auditoria é somente leitura para administradores/gerentes do escopo correspondente.
 
 O privilégio `service_role` deve permanecer no servidor. Ele não é necessário para os relatórios nem para as mutações operacionais do navegador.
+
+## Funções da equipe e histórico
+
+`change_staff_role(p_profile_id uuid, p_role text, p_store_id uuid DEFAULT NULL)` retorna o perfil atualizado e exige um administrador ativo da mesma empresa. `admin` exige quiosque nulo; `manager` e `seller` exigem um quiosque da empresa. A operação preserva a situação ativa/inativa do perfil. Um administrador pode rebaixar a própria função somente se houver outro administrador ativo. O último administrador ativo não pode ser rebaixado ou desativado; o erro retorna `DETAIL = LAST_ACTIVE_ADMIN`. A desativação da própria conta permanece bloqueada.
+
+Alterações de função, acesso e provisionamento usam a mesma trava por organização, com releitura do ator após a espera. Distribuição e geração de contatos respeitam essa mesma ordem de travas. Ao deixar de ser vendedor ou trocar de quiosque, o funcionário libera as tarefas pendentes para redistribuição; contatos concluídos, autoria das vendas, metas e referências da última compra permanecem preservados.
+
+`profile_store_memberships` mantém vínculos históricos para as chaves comerciais; `profile_external_ids` preserva os códigos do PDV por quiosque, inclusive códigos substituídos. Essas tabelas não concedem acesso ao navegador e não determinam a autorização: a função e o quiosque atuais de `profiles` continuam definindo a RLS. Um código histórico do PDV não pode ser transferido para outro funcionário. Isso evita atribuir vendas antigas à pessoa errada em uma reimportação.
+
+Os relatórios podem agrupar e filtrar vendedores históricos da loja autorizada mesmo após promoção ou transferência. O helper de histórico retorna somente identificador, quiosque e nome comercial; gerentes não recebem o perfil completo nem o e-mail de um funcionário promovido a administrador. A geração de novos contatos exige vendedor ativo no quiosque atual, independentemente das referências históricas da carteira.
 
 ## Importação CSV normalizada
 

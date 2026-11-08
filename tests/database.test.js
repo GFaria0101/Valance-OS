@@ -13,7 +13,8 @@ before(async()=>{
  create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
  grant usage on schema auth to authenticated,anon,service_role;grant execute on function auth.uid() to authenticated,anon,service_role;`);
  const migrations=new URL('../supabase/migrations/',import.meta.url);
- for(const migration of (await readdir(migrations)).filter(name=>name.endsWith('.sql')).sort()){
+ const migrationNames=(await readdir(migrations)).filter(name=>name.endsWith('.sql')).sort();
+ for(const migration of migrationNames.filter(name=>name<'202611070003_staff_roles.sql')){
  await db.exec(await readFile(new URL(migration,migrations),'utf8'));}
  for(const n of [1,2,3,4,5,6,7,8,9,19])await owner('insert into auth.users values($1,$2)',[id(n),`user${n}@example.test`]);
  await owner('insert into organizations(id,name) values($1,$2),($3,$4)',[id(100),'Company A',id(101),'Company B']);
@@ -26,6 +27,9 @@ before(async()=>{
  for(const [n,agenda,when,completedBy] of [[144,120,'2026-10-01T10:00:00Z',3],[145,121,'2026-10-08T10:00:00Z',4]])await owner("insert into contact_tasks(id,organization_id,store_id,agenda_id,customer_id,assigned_to,due_date,status,outcome,completed_by,completed_at) values($1,$2,$3,$4,$5,$6,$7,'completed','contacted',$6,$8)",[id(n),id(100),id(110),id(agenda),id(130),id(completedBy),when.slice(0,10),when]);
  await owner("insert into contact_tasks(id,organization_id,store_id,agenda_id,customer_id,assigned_to,due_date,status,outcome,completed_by,completed_at) values($1,$2,$3,$4,$5,$6,'2026-10-09','completed','no_response',$6,'2026-10-09T10:00:00Z')",[id(146),id(100),id(110),id(120),id(131),id(4)]);
  for(const [n,org,store,customer,seller,value] of [[150,100,110,130,3,100],[151,100,110,131,4,200],[152,100,111,132,5,300],[153,101,112,133,7,400]])await owner("insert into sales(id,organization_id,store_id,external_id,customer_id,seller_id,sold_at,gross_amount,discount_amount) values($1,$2,$3,$4,$5,$6,'2026-10-10T12:00:00Z',$7,10)",[id(n),id(org),id(store),`sale-${n}`,id(customer),id(seller),value]);
+ // Exercise the role migration against existing store-bound history, as in production.
+ for(const migration of migrationNames.filter(name=>name>='202611070003_staff_roles.sql')){
+ await db.exec(await readFile(new URL(migration,migrations),'utf8'));}
 });
 after(async()=>{await db?.close();});
 
@@ -46,7 +50,7 @@ test('clients cannot mutate raw tables or elevate roles; checked mutations stay 
  await assert.rejects(()=>asUser(3,"insert into sales(organization_id,store_id,external_id,sold_at,gross_amount) values($1,$2,'forged',now(),1)",[id(100),id(110)]),/permission denied/);
  await assert.rejects(()=>asUser(2,'select set_profile_access($1,false)',[id(5)]),/Sem permissão/);
  await assert.rejects(()=>asUser(2,'select set_profile_access($1,false)',[id(1)]),/Sem permissão/);
- await assert.rejects(()=>asUser(1,'select set_profile_access($1,false)',[id(1)]),/Sem permissão/);
+ await assert.rejects(()=>asUser(1,'select set_profile_access($1,false)',[id(1)]),error=>error.detail==='LAST_ACTIVE_ADMIN');
  await asUser(3,"select save_own_profile('Seller Updated','seller-handle')");
  assert.equal((await owner('select role from profiles where id=$1',[id(3)])).rows[0].role,'seller');
  await assert.rejects(()=>asUser(3,'select save_target($1,$2,$3,$4)',[id(110),id(3),'2026-10-01',1000]),/Sem permissão/);
@@ -56,6 +60,7 @@ test('clients cannot mutate raw tables or elevate roles; checked mutations stay 
 });
 
 test('distribution is atomic, rejects cross-store/inactive sellers and duplicate allocation',async()=>{
+ await assert.rejects(()=>asUser(3,"select complete_contact($1,'contacted')",[id(140)]),/indisponível/);
  await assert.rejects(()=>asUser(2,'select assign_contacts($1,$2,1,$3)',[id(110),id(120),[id(5)]]),/mesmo quiosque/);
  await assert.rejects(()=>asUser(2,'select assign_contacts($1,$2,1,$3)',[id(110),id(120),[id(8)]]),/mesmo quiosque/);
  await assert.rejects(()=>asUser(2,'select assign_contacts($1,$2,5,$3)',[id(110),id(120),[id(3)]]),/suficientes/);
@@ -241,4 +246,111 @@ test('selected-store teams include both organization administrators only for aut
  const foreign=await team(6,id(112));
  assert.deepEqual(ids(foreign.filter(row=>row.role==='admin')),[id(6)]);
  assert(foreign.every(row=>row.organization_id===id(101)));
+});
+
+test('staff roles preserve store history while current permissions and pending assignments change immediately',async t=>{
+ for(const n of [30,31,32,33,34,35,36])await owner('insert into auth.users values($1,$2)',[id(n),`roles${n}@example.test`]);
+ await owner("insert into organizations(id,name) values($1,'Role management')",[id(200)]);
+ await owner("insert into stores(id,organization_id,name) values($1,$2,'Old kiosk'),($3,$2,'New kiosk')",[id(210),id(200),id(211)]);
+ for(const [n,store,role] of [[30,null,'admin'],[31,210,'seller'],[32,210,'manager'],[33,211,'seller'],[34,null,'admin'],[35,211,'manager']]){
+ await owner('insert into profiles(id,organization_id,store_id,role,name,email,external_id) values($1,$2,$3,$4,$5,$6,$7)',[id(n),id(200),store?id(store):null,role,n===31?'Historical Seller':`Roles ${n}`,`roles${n}@example.test`,`HIST-${n}`]);}
+ await owner("insert into agendas(id,organization_id,name,kind) values($1,$2,'History agenda','manual'),($3,$2,'New contacts','manual')",[id(220),id(200),id(221)]);
+ await owner("insert into customers(id,organization_id,store_id,external_id,name,phone,responsible_id,last_purchase_at) values($1,$2,$3,'history-customer','History customer','5511999998888',$4,'2026-10-10T12:00:00Z')",[id(230),id(200),id(210),id(31)]);
+ await owner("insert into customers(id,organization_id,store_id,external_id,name,phone,responsible_id) values($1,$2,$3,'new-store-customer','New store customer','5511999997777',$4)",[id(231),id(200),id(211),id(33)]);
+ await owner("insert into contact_tasks(id,organization_id,store_id,agenda_id,customer_id,assigned_to,status,outcome,completed_by,completed_at,due_date) values($1,$2,$3,$4,$5,$6,'completed','contacted',$6,'2026-10-08T12:00:00Z','2026-10-08')",[id(240),id(200),id(210),id(220),id(230),id(31)]);
+ await owner("insert into contact_tasks(id,organization_id,store_id,agenda_id,customer_id,assigned_to,due_date) values($1,$2,$3,$4,$5,$6,'2099-01-01')",[id(241),id(200),id(210),id(220),id(230),id(31)]);
+ await owner("insert into sales(id,organization_id,store_id,external_id,customer_id,seller_id,sold_at,gross_amount) values($1,$2,$3,'history-sale',$4,$5,'2026-10-10T12:00:00Z',500)",[id(250),id(200),id(210),id(230),id(31)]);
+ await owner("insert into sales_targets(id,organization_id,store_id,seller_id,period_start,amount) values($1,$2,$3,$4,'2026-10-01',1000)",[id(260),id(200),id(210),id(31)]);
+ const role=async(user,target,value,store=null)=>(await asUser(user,'select change_staff_role($1,$2,$3) as data',[id(target),value,store?id(store):null])).rows[0].data;
+ const report=async(user,store,seller=null)=>(await asUser(user,'select report_snapshot($1,$2,$3,$4) as data',[id(store),'2026-10-01','2026-10-31',seller?id(seller):null])).rows[0].data;
+
+ await t.test('only active same-organization administrators may change valid roles and stores',async()=>{
+  await assert.rejects(()=>role(32,31,'admin'),/Somente administradores/);
+  await assert.rejects(()=>role(31,31,'admin'),/Somente administradores/);
+  await assert.rejects(()=>role(30,7,'admin'),/não autorizado/);
+  await assert.rejects(()=>role(30,31,'admin',210),/inválido/);
+  await assert.rejects(()=>role(30,31,'manager'),/inválido/);
+  await assert.rejects(()=>role(30,31,'seller',112),/inválido/);
+  await assert.rejects(()=>role(30,31,'owner'),/inválido/);
+  await assert.rejects(()=>asUser(32,'select * from profile_store_memberships'),/permission denied/);
+  await assert.rejects(()=>asUser(30,'delete from profile_external_ids'),/permission denied/);
+ });
+
+ await t.test('promotion preserves customers, completed contacts, revenue and targets and reports historical names safely',async()=>{
+  const promoted=await role(30,31,'admin');assert.equal(promoted.role,'admin');assert.equal(promoted.store_id,null);
+  assert.equal((await owner('select assigned_to from contact_tasks where id=$1',[id(241)])).rows[0].assigned_to,null);
+  const completed=(await owner('select assigned_to,completed_by from contact_tasks where id=$1',[id(240)])).rows[0];
+  assert.equal(completed.assigned_to,id(31));assert.equal(completed.completed_by,id(31));
+  assert.equal((await owner('select seller_id from sales where id=$1',[id(250)])).rows[0].seller_id,id(31));
+  assert.equal((await owner('select seller_id from sales_targets where id=$1',[id(260)])).rows[0].seller_id,id(31));
+  assert.equal((await owner('select responsible_id from customers where id=$1',[id(230)])).rows[0].responsible_id,id(31));
+  assert.equal((await asUser(32,'select * from profiles where id=$1',[id(31)])).rows.length,0);
+  const history=await report(32,210);assert.equal(history.totals.gross,500);
+  const seller=history.by_seller.find(row=>row.seller_id===id(31));assert.equal(seller.gross,500);assert.equal(seller.name,'Historical Seller');
+  assert.equal(history.by_agenda.find(row=>row.agenda_id===id(220)).by_seller[0].name,'Historical Seller');
+  assert.equal(history.targets.find(row=>row.seller_id===id(31)).amount,1000);
+  assert.equal((await report(32,210,31)).totals.gross,500);
+  const names=(await asUser(32,'select * from private.report_staff($1)',[id(210)])).rows;
+  assert.deepEqual(Object.keys(names[0]).sort(),['name','seller_id','store_id']);
+  await assert.rejects(()=>asUser(32,'select * from private.report_staff($1)',[id(211)]),/não autorizado/);
+  await assert.rejects(()=>asUser(6,'select * from private.report_staff($1)',[id(210)]),/não autorizado/);
+  assert.equal((await asUser(31,'select * from stores')).rows.length,2);
+ });
+
+ await t.test('changing store removes old JWT scope and releases pending tasks without granting historical membership access',async()=>{
+  await role(30,31,'manager',211);
+  assert.deepEqual((await asUser(31,'select id from stores')).rows.map(row=>row.id),[id(211)]);
+  assert.equal((await asUser(31,'select * from sales where store_id=$1',[id(210)])).rows.length,0);
+  assert.equal((await asUser(31,'select * from customers where store_id=$1',[id(210)])).rows.length,0);
+  await assert.rejects(()=>report(31,210),/não autorizado/);
+  await assert.rejects(()=>role(31,31,'admin'),/Somente administradores/);
+  await role(30,31,'seller',211);
+  assert.equal((await asUser(31,'select * from sales_targets where store_id=$1',[id(210)])).rows.length,0);
+  const names=(await asUser(31,'select * from private.report_staff(null)')).rows;
+  assert(names.every(row=>row.seller_id===id(31)&&row.store_id===id(211)));
+  await owner("insert into contact_tasks(id,organization_id,store_id,agenda_id,customer_id,assigned_to,due_date) values($1,$2,$3,$4,$5,$6,'2099-01-02')",[id(242),id(200),id(211),id(220),id(231),id(31)]);
+  await assert.rejects(()=>owner("insert into contact_tasks(organization_id,store_id,agenda_id,customer_id,assigned_to,due_date) values($1,$2,$3,$4,$5,'2099-01-03')",[id(200),id(210),id(220),id(230),id(31)]),/mesmo quiosque/);
+  await role(30,31,'manager',211);
+  assert.equal((await owner('select assigned_to from contact_tasks where id=$1',[id(242)])).rows[0].assigned_to,null);
+  await role(30,31,'seller',211);
+ });
+
+ await t.test('historical PDV codes allow returns and cancellation reimports after promotion and transfer without assigning new contacts to former staff',async()=>{
+  await asUser(30,"select update_staff_profile($1,'Historical Seller','handle','coupon','NEW-31')",[id(31)]);
+  const payload={sales:[{external_id:'history-sale',customer_external_id:'history-customer',seller_external_id:'HIST-31',sold_at:'2026-10-10T12:00:00Z',gross_amount:500,returned_amount:25}]};
+  await asUser(32,'select import_presence_batch($1,$2)',[id(210),JSON.stringify(payload)]);
+  const history=await report(32,210,31);assert.equal(history.totals.gross,500);assert.equal(history.totals.returns,25);
+  assert.equal((await owner('select responsible_id from customers where id=$1',[id(230)])).rows[0].responsible_id,id(31));
+  await asUser(32,'select generate_agenda_tasks($1,$2)',[id(210),id(221)]);
+  const generated=(await owner('select assigned_to from contact_tasks where store_id=$1 and agenda_id=$2 and customer_id=$3',[id(210),id(221),id(230)])).rows;
+  assert.equal(generated.length,1);assert.equal(generated[0].assigned_to,null);
+  for(const [code,external] of [['HIST-31','new-sale-old-code'],['NEW-31','new-sale-new-code']]){
+   await asUser(35,'select import_presence_batch($1,$2)',[id(211),JSON.stringify({sales:[{external_id:external,customer_external_id:'new-store-customer',seller_external_id:code,sold_at:'2026-10-20T12:00:00Z',gross_amount:50}]})]);}
+  assert.equal((await owner("select count(*) as n from sales where store_id=$1 and seller_id=$2",[id(211),id(31)])).rows[0].n,2);
+  await assert.rejects(()=>asUser(30,"select update_staff_profile($1,'Other seller','','','HIST-31')",[id(33)]),/histórico de outro funcionário/);
+  payload.sales[0].status='cancelled';
+  await asUser(32,'select import_presence_batch($1,$2)',[id(210),JSON.stringify(payload)]);
+  assert.equal((await report(32,210,31)).totals.gross,0);
+ });
+
+ await t.test('administrators can edit peers, while demotion and provisioning enforce the last-active-admin rule',async()=>{
+  await asUser(30,"select update_staff_profile($1,'Administrator Updated','admin-handle','')",[id(34)]);
+  assert.equal((await owner('select name,role from profiles where id=$1',[id(34)])).rows[0].name,'Administrator Updated');
+  await assert.rejects(()=>asUser(32,"select update_staff_profile($1,'Forbidden','','')",[id(34)]),/Sem permissão/);
+  await asUser(30,'select set_profile_access($1,false)',[id(34)]);
+  assert.equal((await asUser(34,'select * from stores')).rows.length,0);
+  await assert.rejects(()=>role(34,30,'seller',210),/sem acesso ativo/);
+  await asUser(30,'select set_profile_access($1,true)',[id(34)]);
+  await role(30,34,'manager',210);
+  await assert.rejects(()=>role(30,30,'manager',210),error=>error.detail==='LAST_ACTIVE_ADMIN');
+  await assert.rejects(()=>asUser(30,'select set_profile_access($1,false)',[id(30)]),error=>error.detail==='LAST_ACTIVE_ADMIN');
+  await asUser(30,"select provision_staff($1,null,'admin','New Administrator',$2)",[id(36),'roles36@example.test']);
+  const demoted=await role(30,30,'manager',210);assert.equal(demoted.role,'manager');
+  await assert.rejects(()=>asUser(30,'select set_profile_access($1,false)',[id(36)]),/Sem permissão/);
+  await assert.rejects(()=>asUser(30,"select provision_staff($1,null,'admin','Forbidden',$2)",[id(19),'user19@example.test']),/Sem permissão/);
+  await assert.rejects(()=>role(36,36,'seller',211),error=>error.detail==='LAST_ACTIVE_ADMIN');
+  await asUser(36,'select set_profile_access($1,false)',[id(30)]);
+  assert.equal((await asUser(30,'select * from profiles')).rows.length,0);
+  await assert.rejects(()=>role(30,36,'manager',211),/sem acesso ativo/);
+ });
 });

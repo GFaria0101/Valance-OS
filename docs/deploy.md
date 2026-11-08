@@ -42,6 +42,10 @@ Se um convite for enviado e a vinculação ao quiosque falhar, a API informa `PR
 
 O convite permite ao funcionário definir sua própria senha. A recuperação é enviada por e-mail; a API não retorna senhas e o gerente não conhece a senha definitiva do vendedor.
 
+Um administrador pode convidar e administrar outros administradores da mesma empresa, inclusive editar o cadastro e enviar recuperação para o e-mail do titular. Administradores não ficam vinculados a um quiosque; gerentes e vendedores precisam de um quiosque válido. Gerentes continuam limitados aos vendedores da própria loja e não podem alterar funções.
+
+Alterações de função usam a operação autenticada `change-role` com `user_id`, `role` (`admin`, `manager` ou `seller`) e `store_id` (nulo para administrador; UUID do quiosque para os demais). A função do banco valida o administrador ativo e a empresa, registra a alteração e preserva os vínculos históricos. Não é possível rebaixar ou desativar o último administrador ativo. O perfil ativo no banco determina o acesso: desativá-lo bloqueia as consultas e operações inclusive com uma sessão existente, sem criar bloqueios adicionais na autenticação. A reativação também remove bloqueios de autenticação legados; se essa liberação falhar, a API informa que precisa ser repetida. A própria conta não pode se desativar.
+
 ## 3. Conectar o repositório ao Netlify
 
 1. Crie um site Netlify a partir de `GFaria0101/Valance-OS`.

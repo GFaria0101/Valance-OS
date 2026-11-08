@@ -7,7 +7,7 @@ function uuid(value,label){if(typeof value!=='string'||!UUID.test(value))throw n
 function text(value,label,max=160,{optional=false}={}){if(optional&&(value===undefined||value===null||value===''))return null;if(typeof value!=='string'||!value.trim()||value.trim().length>max)throw new ApiError(400,`${label} inválido.`);return value.trim();}
 function money(value,label){if(typeof value!=='number'||!Number.isFinite(value)||value<0||value>1e12)throw new ApiError(400,`${label} deve ser um valor numérico não negativo.`);return Math.round(value*100)/100;}
 function date(value,label,{optional=false}={}){if(optional&&(value===undefined||value===null||value===''))return null;if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)||!Number.isFinite(Date.parse(value+'T12:00:00Z'))||new Date(value+'T12:00:00Z').toISOString().slice(0,10)!==value)throw new ApiError(400,`${label} inválida; use AAAA-MM-DD.`);return value;}
-function database(result){if(!result.error)return result.data;const code=result.error.code;if(code==='42501')throw new ApiError(403,'Você não tem permissão para esta operação.');if(code==='23505')throw new ApiError(409,'Já existe um registro com este identificador.');if(code==='P0001'||code?.startsWith('22')||code?.startsWith('23'))throw new ApiError(400,'Os dados não atendem às regras da operação. Confira vínculos, valores e identificadores.');throw new ApiError(500,'Não foi possível concluir a operação no banco de dados.');}
+function database(result){if(!result.error)return result.data;const code=result.error.code;if(code==='P0001'&&result.error.details==='LAST_ACTIVE_ADMIN')throw new ApiError(409,'Mantenha pelo menos um administrador ativo antes de rebaixar ou desativar esta conta.');if(code==='42501')throw new ApiError(403,'Você não tem permissão para esta operação.');if(code==='23505')throw new ApiError(409,'Já existe um registro com este identificador.');if(code==='P0001'||code?.startsWith('22')||code?.startsWith('23'))throw new ApiError(400,'Os dados não atendem às regras da operação. Confira vínculos, valores e identificadores.');throw new ApiError(500,'Não foi possível concluir a operação no banco de dados.');}
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});}
 export function validateImport(payload){
   object(payload);keys(payload,['customers','sales']);
@@ -35,7 +35,7 @@ export function createApi({createClient,env=process.env}){
   function redirect(kind){if(!env.APP_URL)throw new ApiError(503,'Endereço público do aplicativo não configurado.');let url;try{url=new URL(env.APP_URL);}catch{throw new ApiError(503,'Endereço público inválido.');}if(url.protocol!=='https:'&&!(url.protocol==='http:'&&['localhost','127.0.0.1'].includes(url.hostname)))throw new ApiError(503,'Endereço público exige HTTPS.');url.pathname='/';url.search=`?auth=${kind}`;url.hash='';return url.toString();}
   return async function handle(request){try{
     const action=new URL(request.url).searchParams.get('action')||'session-info';
-    const methods={'session-info':'GET','sync-state':'GET',health:'GET','invite-user':'POST','update-user':'POST','set-access':'POST','reset-user':'POST','sync-presence':'POST','import-presence':'POST'};
+    const methods={'session-info':'GET','sync-state':'GET',health:'GET','invite-user':'POST','update-user':'POST','change-role':'POST','set-access':'POST','reset-user':'POST','sync-presence':'POST','import-presence':'POST'};
     if(!methods[action])throw new ApiError(404,'Operação não encontrada.');
     if(request.method!==methods[action])throw new ApiError(405,'Método não permitido.');
     if(request.method==='POST'&&request.headers.get('origin')&&env.APP_URL&&new URL(env.APP_URL).origin!==request.headers.get('origin'))throw new ApiError(403,'Origem da requisição não permitida.');
@@ -45,8 +45,14 @@ export function createApi({createClient,env=process.env}){
     const meResult=await client.from('profiles').select(PROFILE_FIELDS).eq('id',auth.data.user.id).maybeSingle();
     if(meResult.error||!meResult.data||!meResult.data.is_active)throw new ApiError(403,'Seu acesso está desativado ou ainda não foi vinculado à empresa.');
     const me=meResult.data;
-    async function scope(storeId){uuid(storeId,'Quiosque');if(me.role==='seller'||(me.role==='manager'&&storeId!==me.store_id))throw new ApiError(403,'Você não pode administrar este quiosque.');const store=database(await client.from('stores').select('id,organization_id,name').eq('id',storeId).eq('organization_id',me.organization_id).maybeSingle());if(!store)throw new ApiError(403,'Quiosque não disponível para esta conta.');return store;}
-    async function staff(userId){uuid(userId,'Usuário');const target=database(await client.from('profiles').select(PROFILE_FIELDS).eq('id',userId).eq('organization_id',me.organization_id).maybeSingle());if(!target||me.role==='seller'||(me.role==='manager'&&(target.store_id!==me.store_id||target.role!=='seller'))||(target.role==='admin'&&me.id!==target.id))throw new ApiError(403,'Você não pode administrar este usuário.');return target;}
+    async function scope(storeId){uuid(storeId,'Quiosque');if(!['admin','manager'].includes(me.role)||(me.role==='manager'&&storeId!==me.store_id))throw new ApiError(403,'Você não pode administrar este quiosque.');const store=database(await client.from('stores').select('id,organization_id,name').eq('id',storeId).eq('organization_id',me.organization_id).maybeSingle());if(!store||store.organization_id!==me.organization_id)throw new ApiError(403,'Quiosque não disponível para esta conta.');return store;}
+    async function staff(userId){uuid(userId,'Usuário');const target=database(await client.from('profiles').select(PROFILE_FIELDS).eq('id',userId).eq('organization_id',me.organization_id).maybeSingle());if(!target||target.organization_id!==me.organization_id||!['admin','manager'].includes(me.role)||(me.role==='manager'&&(target.store_id!==me.store_id||target.role!=='seller')))throw new ApiError(403,'Você não pode administrar este usuário.');return target;}
+    async function assignment(role,storeId){
+      if(!['admin','manager','seller'].includes(role))throw new ApiError(400,'Perfil de acesso inválido.');
+      if(me.role!=='admin'&&(me.role!=='manager'||role!=='seller'))throw new ApiError(403,'Perfil de acesso não permitido.');
+      if(role==='admin'){if(storeId!==null)throw new ApiError(400,'Administrador deve ter quiosque nulo.');return null;}
+      await scope(storeId);return storeId;
+    }
     if(action==='session-info'){
       const stores=database(await client.from('stores').select('id,organization_id,name,external_id').eq('organization_id',me.organization_id).order('name'));
       const organization=database(await client.from('organizations').select('id,name,timezone').eq('id',me.organization_id).maybeSingle());
@@ -65,26 +71,33 @@ export function createApi({createClient,env=process.env}){
       return json({error:'A sincronização automática depende da documentação e autorização da API do Presence. Use a importação de arquivos até a integração ser configurada.',code:'PRESENCE_NOT_CONFIGURED'},409);
     }
     if(action==='invite-user'){
-      keys(data,['store_id','email','name','role','cpf','external_id']);await scope(data.store_id);
-      if(!['manager','seller'].includes(data.role)||me.role==='manager'&&data.role!=='seller')throw new ApiError(403,'Perfil de acesso não permitido.');
+      keys(data,['store_id','email','name','role','cpf','external_id']);const storeId=await assignment(data.role,data.store_id);
       const email=text(data.email,'E-mail',254).toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw new ApiError(400,'E-mail inválido.');
       const name=text(data.name,'Nome',160),cpf=text(data.cpf,'CPF',11,{optional:true});if(cpf&&!/^\d{11}$/.test(cpf))throw new ApiError(400,'CPF deve conter 11 números.');const external_id=text(data.external_id,'Identificador do Presence',120,{optional:true});
       const service=adminClient(cfg),invite=await service.auth.admin.inviteUserByEmail(email,{redirectTo:redirect('invite')});
       if(invite.error||!invite.data?.user)throw new ApiError(400,'Não foi possível enviar o convite. Verifique se o e-mail já possui acesso.');
       const id=invite.data.user.id;
-      const result=await client.rpc('provision_staff',{p_user_id:id,p_store_id:data.store_id,p_role:data.role,p_name:name,p_email:email,p_cpf:cpf,p_external_id:external_id});
-      if(result.error)return json({error:'O convite foi enviado, mas o vínculo ao quiosque não foi concluído. A conta permanece sem acesso até o administrador corrigir o vínculo.',code:'PROFILE_PROVISIONING_PENDING',user_id:id},409);
+      const result=await client.rpc('provision_staff',{p_user_id:id,p_store_id:storeId,p_role:data.role,p_name:name,p_email:email,p_cpf:cpf,p_external_id:external_id});
+      if(result.error)return json({error:'O convite foi enviado, mas o vínculo à empresa não foi concluído. A conta permanece sem acesso até o administrador corrigir o vínculo.',code:'PROFILE_PROVISIONING_PENDING',user_id:id},409);
       return json({user_id:id,status:'invited'},201);
     }
     if(action==='update-user'){
       keys(data,['user_id','name','handle','coupon','external_id']);await staff(data.user_id);
       const result=database(await client.rpc('update_staff_profile',{p_profile_id:data.user_id,p_name:text(data.name,'Nome',160),p_handle:text(data.handle,'Perfil',80,{optional:true})??'',p_coupon:text(data.coupon,'Cupom',40,{optional:true})??'',p_external_id:text(data.external_id,'Identificador do Presence',120,{optional:true})}));return json({result});
     }
+    if(action==='change-role'){
+      keys(data,['user_id','role','store_id']);if(me.role!=='admin')throw new ApiError(403,'Somente o administrador pode alterar funções.');
+      await staff(data.user_id);const storeId=await assignment(data.role,data.store_id);
+      const result=database(await client.rpc('change_staff_role',{p_profile_id:data.user_id,p_role:data.role,p_store_id:storeId}));return json({result});
+    }
     if(action==='set-access'){
       keys(data,['user_id','is_active']);await staff(data.user_id);if(typeof data.is_active!=='boolean')throw new ApiError(400,'Informe se o acesso deve ficar ativo.');
-      const service=adminClient(cfg);database(await client.rpc('set_profile_access',{p_profile_id:data.user_id,p_active:data.is_active}));
-      const ban=await service.auth.admin.updateUserById(data.user_id,{ban_duration:data.is_active?'none':'876000h'});
-      if(ban.error)return json({error:'A permissão no banco foi atualizada, mas a atualização da autenticação precisa ser repetida.',code:'AUTH_UPDATE_PENDING',database_active:data.is_active},503);
+      const service=data.is_active?adminClient(cfg):null;database(await client.rpc('set_profile_access',{p_profile_id:data.user_id,p_active:data.is_active}));
+      // The active profile is authoritative for RLS/RPC access. Never create an
+      // Auth ban after the database commit: concurrent reactivation could finish
+      // first and leave an active profile locked out. Only remove legacy bans.
+      if(service){const unban=await service.auth.admin.updateUserById(data.user_id,{ban_duration:'none'});
+        if(unban.error)return json({error:'A permissão no banco foi atualizada, mas a liberação da autenticação precisa ser repetida.',code:'AUTH_UPDATE_PENDING',database_active:true},503);}
       return json({user_id:data.user_id,is_active:data.is_active});
     }
     if(action==='reset-user'){

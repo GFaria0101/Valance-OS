@@ -10,11 +10,12 @@ const baseUrl=`http://127.0.0.1:${port}`;
 const server=spawn(process.execPath,['node_modules/vite/bin/vite.js','preview','--host','127.0.0.1','--port',String(port),'--strictPort','--outDir','/tmp/valance-ui-test-dist'],{stdio:'ignore'});
 const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const makeToken=user=>['test',Buffer.from(JSON.stringify({sub:user.id,role:'authenticated',aud:'authenticated',exp:Math.floor(Date.now()/1000)+3600})).toString('base64url'),'fixture'].join('.');
+const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};};
 const profile={id:id(1),organization_id:id(100),store_id:id(110),name:'Gerente de teste',email:'manager@example.test',role:'manager',is_active:true,handle:'',coupon:''};
 const seller={...profile,id:id(3),name:'Vendedor de teste',email:'seller@example.test',role:'seller',external_id:'S1'};
 const admin={...profile,id:id(2),store_id:null,name:'Administrador de teste',email:'admin@example.test',role:'admin'};
 const otherAdmin={...admin,id:id(4),name:'Wilber administrador de teste',email:'other-admin@example.test'};
-const accounts=[profile,seller,admin];
+const accounts=[profile,seller,admin,otherAdmin];
 const store={id:id(110),name:'Quiosque de teste'},agenda={id:id(120),name:'Relacionamento',kind:'manual'};
 const otherStore={id:id(111),name:'Outro quiosque de teste'};
 const snapshot={profile,stores:[store],profiles:[profile,seller],agendas:[agenda],totals:{gross:100,returns:0,orders:1,contacts_available:1,contacts_completed:0,conversion:null,previous_gross:80,attributed_gross:0},by_seller:[{seller_id:seller.id,name:seller.name,gross:100,returns:0,orders:1,contacts_available:1,contacts_completed:0,available_preferencial:1,completed_preferencial:0,completed_gotas:0}],by_agenda:[],by_store:[{store_id:store.id,name:store.name,gross:100,returns:0,orders:1}],by_day:[],targets:[],latest_sync:null};
@@ -25,17 +26,25 @@ try{
   const context=await browser.newContext(),page=await context.newPage({viewport:{width:1440,height:1000}}),errors=[],calls=[];
   page.on('pageerror',error=>errors.push(error.message));
   await context.routeWebSocket('wss://fixture-project.supabase.co/**',socket=>socket.close());
-  let rejectReportForStore=null,releaseInvitation,invitationStarted;
+  let rejectReportForStore=null,releaseInvitation,invitationStarted,nextInvitationHold=null,nextReportHold=null;
   const invitationInFlight=new Promise(resolve=>{invitationStarted=resolve;});
   const invitationResponse=new Promise(resolve=>{releaseInvitation=resolve;});
   const mockApi=async route=>{
     const url=new URL(route.request().url()),body=route.request().postDataJSON();
     calls.push({path:url.pathname,search:url.search,body});
     if(url.searchParams.get('action')==='invite-user'){
+      if(nextInvitationHold){const hold=nextInvitationHold;nextInvitationHold=null;hold.started.resolve();await hold.release.promise;}
       invitationStarted();await invitationResponse;
       return route.fulfill({status:201,contentType:'application/json',body:JSON.stringify({user_id:id(8),status:'invited'})});
     }
     if(url.searchParams.get('action')==='import-presence')return route.fulfill({contentType:'application/json',body:JSON.stringify({result:{customers:1}})});
+    if(url.searchParams.get('action')==='reset-user')return route.fulfill({contentType:'application/json',body:JSON.stringify({status:'recovery_sent'})});
+    if(['update-user','change-role'].includes(url.searchParams.get('action'))){
+      const person=accounts.find(p=>p.id===body.user_id);assert(person,'fixture target exists');
+      if(url.searchParams.get('action')==='change-role')Object.assign(person,{role:body.role,store_id:body.store_id});
+      else for(const key of ['name','handle','coupon','external_id'])if(key in body)person[key]=body[key];
+      return route.fulfill({contentType:'application/json',body:JSON.stringify({result:person})});
+    }
     return route.fulfill({status:404,contentType:'application/json',body:JSON.stringify({error:'Unexpected API action'})});
   };
   const mockSupabase=async route=>{
@@ -46,13 +55,16 @@ try{
     if(url.pathname==='/auth/v1/token'){const person=accounts.find(p=>p.email===body.email)||profile;result={access_token:makeToken(person),refresh_token:'test-refresh-token',expires_in:3600,token_type:'bearer',user:{id:person.id,email:person.email,aud:'authenticated',role:'authenticated',created_at:new Date().toISOString()}};}
     else if(url.pathname==='/auth/v1/user')result={id:caller.id,email:caller.email,aud:'authenticated',role:'authenticated'};
     else if(url.pathname==='/rest/v1/profiles')result=[accounts.find(p=>url.searchParams.get('id')==='eq.'+p.id)||caller];
-    else if(url.pathname==='/rest/v1/stores')result=caller.role==='admin'?[store,otherStore]:[store];
+    else if(url.pathname==='/rest/v1/stores')result=caller.role==='admin'?[store,otherStore]:[store,otherStore].filter(row=>row.id===caller.store_id);
     else if(url.pathname==='/rest/v1/rpc/report_snapshot'){
       if(rejectReportForStore&&body.p_store_id===rejectReportForStore){rejectReportForStore=null;return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({message:'Período inválido (máximo 10 anos)'})});}
-      result={...snapshot,profile:caller,stores:caller.role==='admin'?[store,otherStore]:[store],profiles:caller.role==='admin'?[caller,otherAdmin,profile,seller]:caller.role==='seller'?[seller]:[caller,seller]};
+      const scopedStore=[store,otherStore].find(row=>row.id===(body.p_store_id||caller.store_id))||store;
+      const visible=caller.role==='seller'?[caller]:accounts.filter(p=>p.id===caller.id||p.store_id===scopedStore.id&&p.role==='seller'||caller.role==='admin'&&(p.role==='admin'||p.store_id===scopedStore.id));
+      result={...snapshot,profile:caller,stores:caller.role==='admin'?[store,otherStore]:[scopedStore],profiles:visible,totals:{...snapshot.totals,gross:caller.role==='admin'?9009:100}};
+      if(nextReportHold?.userId===caller.id){const hold=nextReportHold;nextReportHold=null;const captured=JSON.stringify(result);hold.started.resolve();await hold.release.promise;return route.fulfill({contentType:'application/json',body:captured});}
     }
     else if(url.pathname==='/rest/v1/contact_tasks')result=[{id:id(140),status:'pending',due_date:new Date().toISOString().slice(0,10),customer:{name:'Cliente teste',phone:'5511999998888',do_not_contact:false},agenda:{name:agenda.name}}];
-    else if(url.pathname==='/rest/v1/customers')result=[{id:id(130),name:'Cliente teste',phone:'5511999998888'}];
+    else if(url.pathname==='/rest/v1/customers')result=[{id:id(130),name:caller.role==='admin'?'Cliente administrativo confidencial':'Cliente teste',phone:'5511999998888'}];
     else if(url.pathname==='/rest/v1/rpc/assign_contacts')result={assigned:1};
     else if(url.pathname==='/rest/v1/rpc/complete_contact')result={status:'completed'};
     else if(url.pathname==='/auth/v1/recover'||url.pathname==='/auth/v1/logout')result={};
@@ -84,7 +96,8 @@ try{
   await second.locator('.workspace-trigger').click();await second.getByRole('button',{name:'Sair da conta',exact:true}).click();
   await page.getByRole('button',{name:'Entrar',exact:true}).waitFor();assert(!((await page.locator('body').innerText()).includes(profile.name)));
   await second.locator('[name="email"]').fill(seller.email);await second.locator('[name="password"]').fill('fixture-password-only');await second.getByRole('button',{name:'Entrar',exact:true}).click();
-  await page.locator('.workspace-trigger').filter({hasText:seller.name}).waitFor({timeout:5000}).catch(async problem=>{console.error('FIRST TAB',await page.locator('body').innerText(),'SECOND TAB',await second.locator('body').innerText());throw problem;});
+  await second.locator('#production-greeting').waitFor();await page.bringToFront();
+  await page.locator('.workspace-trigger').filter({hasText:seller.name}).waitFor({timeout:10000}).catch(async problem=>{console.error('FIRST TAB',await page.locator('body').innerText(),'SECOND TAB',await second.locator('body').innerText());throw problem;});
   assert(!((await page.locator('body').innerText()).includes(profile.name)));assert.equal(await page.locator('[data-action="nav:imports"]').count(),0);
   const invitationFinished=page.waitForResponse(response=>response.url().includes('/.netlify/functions/api?action=invite-user'));
   releaseInvitation();await (await invitationFinished).finished();
@@ -105,7 +118,7 @@ try{
   await adminContext.route(fixtureUrl+'/**',mockSupabase);await adminContext.route(baseUrl+'/.netlify/functions/api**',mockApi);
   await adminPage.goto(baseUrl);await adminPage.locator('[name="email"]').fill(admin.email);await adminPage.locator('[name="password"]').fill('fixture-password-only');await adminPage.getByRole('button',{name:'Entrar',exact:true}).click();await adminPage.locator('#production-greeting').waitFor();
   // Organization administrators remain visible in team management even though
-  // their profiles have no store. Another admin is readable, never editable.
+  // their profiles have no store. Authorized admins can now edit/reset peers.
   await adminPage.locator('.workspace-trigger').click();await adminPage.locator('.sidebar [data-action="nav:users"]').click();
   await adminPage.getByRole('heading',{name:'Equipe do quiosque e administradores',exact:true}).waitFor();
   const ownAdminRow=adminPage.getByRole('row').filter({has:adminPage.getByRole('cell',{name:admin.email,exact:true})});
@@ -113,13 +126,34 @@ try{
   assert.equal(await ownAdminRow.count(),1);assert.equal(await otherAdminRow.count(),1);
   assert.equal(await adminPage.getByRole('cell',{name:'Administrador',exact:true}).count(),2);
   assert.match(await otherAdminRow.innerText(),new RegExp(otherAdmin.name));
-  for(const name of ['Editar','Desativar','Recuperar senha'])assert.equal(await otherAdminRow.getByRole('button',{name,exact:true}).count(),0,`another administrator cannot ${name}`);
+  for(const name of ['Editar','Alterar função','Desativar','Recuperar senha'])assert.equal(await otherAdminRow.getByRole('button',{name,exact:true}).count(),1,`another administrator supports ${name}`);
   for(const name of ['Editar','Recuperar senha'])assert.equal(await ownAdminRow.getByRole('button',{name,exact:true}).count(),1,`own administrator preserves ${name}`);
   assert.equal(await ownAdminRow.getByRole('button',{name:'Desativar',exact:true}).count(),0);
   for(const person of [profile,seller]){
     const row=adminPage.getByRole('row').filter({has:adminPage.getByRole('cell',{name:person.email,exact:true})});assert.equal(await row.count(),1);
     for(const name of ['Editar','Desativar','Recuperar senha'])assert.equal(await row.getByRole('button',{name,exact:true}).count(),1,`operational ${person.role} preserves ${name}`);
   }
+  await otherAdminRow.getByRole('button',{name:'Editar',exact:true}).click();
+  await adminPage.locator('#edit-form [name="name"]').fill('Wilber administrador atualizado');await adminPage.locator('#edit-form [type="submit"]').click();await adminPage.getByText('Funcionário atualizado.',{exact:true}).waitFor();
+  assert(calls.some(call=>call.search==='?action=update-user'&&call.body.user_id===otherAdmin.id&&call.body.name==='Wilber administrador atualizado'));
+  await otherAdminRow.getByRole('button',{name:'Recuperar senha',exact:true}).click();await adminPage.getByText('Solicitação de recuperação enviada. Nenhuma senha é compartilhada.',{exact:true}).waitFor();
+  assert(calls.some(call=>call.search==='?action=reset-user'&&call.body.user_id===otherAdmin.id));
+  const changeRole=async(person,role,storeId)=>{
+    const row=adminPage.getByRole('row').filter({has:adminPage.getByRole('cell',{name:person.email,exact:true})});
+    await row.getByRole('button',{name:'Alterar função',exact:true}).click();await adminPage.locator('#role-form [name="role"]').selectOption(role);
+    if(role!=='admin')await adminPage.locator('#role-form [name="store_id"]').selectOption(storeId);
+    else assert.equal(await adminPage.locator('#role-form [name="store_id"]').isDisabled(),true);
+    await adminPage.locator('#role-form [name="confirm"]').check();await adminPage.locator('#role-form [type="submit"]').click();
+  };
+  for(const role of ['admin','manager','seller']){
+    await changeRole(seller,role,store.id);await adminPage.getByText('Função e permissões atualizadas.',{exact:true}).waitFor();
+    assert(calls.some(call=>call.search==='?action=change-role'&&call.body.user_id===seller.id&&call.body.role===role&&call.body.store_id===(role==='admin'?null:store.id)));
+  }
+  await adminPage.getByRole('button',{name:'Convidar funcionário',exact:true}).click();await adminPage.locator('#invite-form [name="name"]').fill('Administrador convidado de teste');await adminPage.locator('#invite-form [name="email"]').fill('invited-admin@example.test');await adminPage.locator('#invite-form [name="role"]').selectOption('admin');
+  assert.equal(await adminPage.locator('#invite-form [name="store_id"]').isDisabled(),true);
+  await adminPage.locator('#invite-form [type="submit"]').click();await adminPage.locator('#production-share-text').waitFor();
+  assert(calls.some(call=>call.search==='?action=invite-user'&&call.body.role==='admin'&&call.body.store_id===null));
+  await adminPage.locator('[data-action="close"]').click();
   await adminPage.locator('.workspace-trigger').click();await adminPage.locator('.sidebar [data-action="nav:imports"]').click();
   const previousFrom=await adminPage.locator('#production-filters [name="from"]').inputValue();
   rejectReportForStore=otherStore.id;
@@ -132,6 +166,39 @@ try{
   await adminPage.getByRole('button',{name:'Validar e importar para '+store.name,exact:true}).click();await adminPage.getByText('Importação confirmada. Os usuários conectados receberão a atualização.',{exact:true}).waitFor();
   assert.equal(calls.findLast(call=>call.search==='?action=import-presence').body.store_id,store.id);
   assert(calls.some(call=>call.path.endsWith('report_snapshot')&&call.body.p_store_id===otherStore.id&&call.body.p_from==='1900-01-01'));
+
+  // Self-demotion must reload authorization, remove admin data/actions and use
+  // the newly assigned store without requiring another login or a fresh JWT.
+  await adminPage.locator('.workspace-trigger').click();await adminPage.locator('.sidebar [data-action="nav:users"]').click();
+  await changeRole(admin,'manager',otherStore.id);await adminPage.getByText('Sua função foi atualizada.',{exact:true}).waitFor();
+  assert.equal(await adminPage.locator('[data-action^="role:"]').count(),0);
+  assert.equal(await adminPage.locator('#production-filters [name="store"]').inputValue(),otherStore.id);
+  assert(!((await adminPage.locator('body').innerText()).includes(otherAdmin.email)));
+  assert(!((await adminPage.locator('main').innerText()).includes('9.009,00')));
+
+  // Another administrator promotes this same account. A visibility recheck
+  // represents returning to the tab after that external permission update.
+  Object.assign(admin,{role:'admin',store_id:null});await adminPage.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+  await adminPage.waitForFunction(()=>document.querySelector('footer')?.textContent.includes('admin'));
+  await adminPage.locator('.workspace-trigger').click();await adminPage.locator('.sidebar [data-action="nav:customers"]').click();
+  await adminPage.locator('[name="query"]').fill('Busca privada anterior');await adminPage.getByRole('button',{name:'Buscar',exact:true}).click();
+  await adminPage.locator('.workspace-trigger').click();await adminPage.locator('.sidebar [data-action="nav:users"]').click();
+  const heldReport={userId:admin.id,started:deferred(),release:deferred()},heldInvite={started:deferred(),release:deferred()};nextReportHold=heldReport;nextInvitationHold=heldInvite;
+  // Start a second report request while the existing team DOM is still shown.
+  await adminPage.evaluate(()=>document.querySelector('.sidebar [data-action="nav:users"]').click());await heldReport.started.promise;
+  await adminPage.getByRole('button',{name:'Convidar funcionário',exact:true}).click({force:true});
+  const previousRoleInvite={name:'Funcionário da autorização antiga',email:'previous-role@example.test'};
+  await adminPage.locator('#invite-form [name="name"]').fill(previousRoleInvite.name);await adminPage.locator('#invite-form [name="email"]').fill(previousRoleInvite.email);await adminPage.locator('#invite-form [type="submit"]').click();await heldInvite.started.promise;
+  Object.assign(admin,{role:'seller',store_id:otherStore.id});await adminPage.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+  await adminPage.waitForFunction(()=>document.querySelector('footer')?.textContent.includes('seller'));
+  assert.equal(await adminPage.locator('[data-action="nav:users"]').count(),0);assert.equal(await adminPage.locator('[data-action="nav:imports"]').count(),0);assert.equal(await adminPage.locator('#modal-root .modal').count(),0);
+  const oldReportFinished=adminPage.waitForResponse(response=>response.url().includes('/rpc/report_snapshot')&&response.request().postDataJSON().p_store_id===store.id);
+  const oldInviteFinished=adminPage.waitForResponse(response=>response.url().includes('/.netlify/functions/api?action=invite-user'));
+  heldReport.release.resolve();heldInvite.release.resolve();await Promise.all([(await oldReportFinished).finished(),(await oldInviteFinished).finished()]);await adminPage.waitForTimeout(100);
+  const reducedBody=await adminPage.locator('body').innerText();
+  for(const privateValue of [otherAdmin.email,previousRoleInvite.name,previousRoleInvite.email,'9.009,00'])assert(!reducedBody.includes(privateValue),`reduced authorization cannot show ${privateValue}`);
+  assert.equal(await adminPage.locator('#production-share-text').count(),0);assert.equal(await adminPage.locator('[data-action^="role:"]').count(),0);
+  await adminPage.locator('.workspace-trigger').click();await adminPage.locator('.sidebar [data-action="nav:customers"]').click();assert.equal(await adminPage.locator('[name="query"]').inputValue(),'','permission reset clears private search text');
   await adminContext.close();
-  assert.deepEqual(errors,[]);console.log('PASS production UI: real auth flow (mocked service), no demo bypass, database snapshot, assignment/contact RPCs, date constraints, empty conversion, mobile layout, cross-tab account isolation, in-flight invitation isolation, organization admin visibility with restricted actions and failed store-filter rollback before import. No remote project used.');
+  assert.deepEqual(errors,[]);console.log('PASS production UI: mocked auth/RPC flows, mobile layout, cross-account and in-flight invitation isolation, store rollback, peer admin edits/recovery, role changes/invites and authorization cleanup with stale responses. No remote project used.');
 }finally{await browser?.close();server.kill();}
